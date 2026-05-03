@@ -1,0 +1,26 @@
+# MATLAB temporary files
+*.asv
+*.m~
+*.slxc
+*.mex*
+*.fig
+
+# Large data/result files
+*.mat
+*.h5
+*.hdf5
+*.vtk
+*.vtu
+*.csv
+*.dat
+*.txt
+
+# Output folders
+output/
+results/
+temp/
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
