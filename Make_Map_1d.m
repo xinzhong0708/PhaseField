@@ -108,7 +108,7 @@ e               =  Calc_e(pars,c);
 E               =  Calc_E_Tot(e,p);
 
 %Save
-save('Map1d','E_sc','Lx','pars','c','E','e','p','phi','eta','mu_e','chi','x','dx','nx','L_sc','F','Np','Ne')
+save('Map1d','E_sc','Lx','pars','c','E','e','p','phi','eta','mu_e','chi','x','dx','nx','ny','L_sc','F','Np','Ne')
 
 
 %Optional plot

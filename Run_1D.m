@@ -25,12 +25,12 @@ disp(1/L/m)
 pause(1)
 
 %Time step
-dt_phy          =  1e-12/t_sc;
+dt_phy          =   1e-9/t_sc;
 dt_max          =    1e2/t_sc;
 dt_min          =  1e-16/t_sc;
 t_tot           =    1e5/t_sc;
-dE_target       =  5e-3;
-dp_target       =  5e-3;
+dE_target       =  2e-2;
+dp_target       =  2e-2;
 dmu_target      =  1e5;
 time            =  0;
 
@@ -69,11 +69,7 @@ dt_grow_fac     = 1.05;   % slow growth
 dt_shrink_fac   = 0.5;    % fast shrink after rejection
 err_grow        = 0.25;   % only count as "good" if error < 25% of target
 
-
-load temp
-dp_target = 1e-2;
-dE_target = 1e-2;
-for it = it:1e6
+for it = 1:1e6
 
     tic
 
@@ -104,7 +100,7 @@ for it = it:1e6
 
 
     % Variable penalty
-    eta_vec = kappa_from_p_smooth_full(p_t, eta, eta*1);
+    eta_vec = kappa_from_p_smooth_full(p_t, eta, eta*0.1);
 
 
     % First LE: use trial p_t but old bulk composition Eo
