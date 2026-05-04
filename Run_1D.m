@@ -1,5 +1,5 @@
 %Clear and restart
-clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
+clear;figure(2);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Load map
 load Map1d.mat
@@ -63,16 +63,12 @@ disp([mean(E{1}) mean(E{2}) mean(E{3}) mean(E{4}) ])
 
 % Simple stable timestep controller
 dt_good_count   = 0;
-
 dt_grow_after   = 8;      % grow only after 8 very good accepted steps
-dt_grow_fac     = 1.05;   % slow growth
+dt_grow_fac     = 1.10;   % slow growth
 dt_shrink_fac   = 0.5;    % fast shrink after rejection
 err_grow        = 0.25;   % only count as "good" if error < 25% of target
 
 for it = 1:1e6
-
-    tic
-
 
     % Accepted old state
     Eo        = E;
@@ -90,8 +86,8 @@ for it = 1:1e6
 
     % TRIAL: Allen-Cahn
     % Build Allen-Cahn source from accepted old state
-    s     = Calc_S_AllenCahn(phio, po, LL, F, omgo);
-    phi_t = zeros(size(phio));
+    s         =  Calc_S_AllenCahn(phio, po, LL, F, omgo);
+    phi_t     =  zeros(size(phio));
     for ip = 1:Np
         phi_t(:,:,ip) = Solver_1D_AllenCahn_Periodic(s{ip}, phio(:,:,ip), LK, dx, dt_try);
     end
@@ -100,7 +96,7 @@ for it = 1:1e6
 
 
     % Variable penalty
-    eta_vec = kappa_from_p_smooth_full(p_t, eta, eta*0.1);
+    eta_vec = kappa_from_p_smooth_full(p_t,eta,0.1*eta,4, 1e-2,4, 1e-2, 0.2*eta); 
 
 
     % First LE: use trial p_t but old bulk composition Eo
@@ -117,22 +113,31 @@ for it = 1:1e6
     [c_corr, mu_corr, chi_corr, omg_corr, LE_state_corr] = LE_Run(pars, p_t, c_t, E_t, mu_t, chi_t, eta_vec,[1 1000], [1 1000], LE_state_try);
 
 
-    % Diagnostics on the actual accepted-candidate state
-    dE  = max(abs(cell2mat(E_t)      - cell2mat(Eo)),    [], 'all');
-    dp  = max(abs(p_t(:) - po(:)));
-    dmu = max(abs(cell2mat(mu_corr)  - cell2mat(mu_eo)), [], 'all');
+    dE = max(abs(cell2mat(E_t) - cell2mat(Eo)), [], 'all');
+    dp = max(abs(p_t(:) - po(:)));
 
-    % Normalized timestep error
-    err_E  = dE  / max(dE_target,  eps);
-    err_p  = dp  / max(dp_target,  eps);
-    err_mu = dmu / max(dmu_target, eps);
+    Dmu = abs(cell2mat(mu_corr) - cell2mat(mu_eo));
 
-    err = max([err_E, err_p, err_mu]);
+    % Robust dmu: ignore the largest 1% of local mu jumps
+    dmu_rob  = Robust_Max_1D(Dmu, 0.99);
+    dmu_hard = max(Dmu, [], 'all');
 
+    err_E  = dE / max(dE_target, eps);
+    err_p  = dp / max(dp_target, eps);
+    err_mu = dmu_rob / max(dmu_target, eps);
 
-    % Simple stable timestep controller
-    dt_next     = dt_try;
-    reject_step = err > 1.0;
+    % E and p are primary evolved fields
+    err_primary = max(err_E, err_p);
+
+    % mu controls dt growth, but does not always reject the step
+    err = max([err_primary, err_mu]);
+
+    % Only reject for mu if the spike is not just one-grid noise
+    hard_bad_mu = dmu_hard > 50*dmu_target && dmu_rob > 2*dmu_target;
+
+    dt_next = dt_try;
+    reject_step = err_primary > 1.0 || hard_bad_mu || any(~isfinite(Dmu(:)));
+
 
     if reject_step
         % Bad step: reject and shrink immediately
@@ -179,16 +184,11 @@ for it = 1:1e6
         dt_phy   = dt_next;
     end
 
-
-
-    toc
-
-
     % Plotting / history
     TIME(it)   = time;
     PHASE1(it) = mean(p(:,:,1),'all');
     PHASE2(it) = mean(p(:,:,2),'all');
-
+    
     if mod(it,5)==0
         disp(dt_phy)
         disp([mean(p(:,:,1),'all'), mean(E_t{1}(:))])
@@ -207,6 +207,19 @@ for it = 1:1e6
 end
 
 
+
+function y = Robust_Max_1D(A, q)
+%ROBUST_MAX_1D q-quantile of abs(A), no Statistics Toolbox needed.
+v = abs(A(:));
+v = v(isfinite(v));
+if isempty(v)
+    y = inf;
+    return
+end
+v = sort(v);
+id = max(1, min(numel(v), ceil(q*numel(v))));
+y = v(id);
+end
 
 
 function [mu,C] = Solver_1D_Diffusion(co, muo, M, chi, kappa, dx, dt, s, chiRelFloor, chiAbsFloor)

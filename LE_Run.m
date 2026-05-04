@@ -18,7 +18,7 @@ pmin       = 3e-2;
 
 %Hysteresis thresholds
 p_on       = pmin;
-p_off      = 0.1*pmin;
+p_off      = 0.5*pmin;
 
 Np         = numel(c);
 N          = numel(c{1}{1});

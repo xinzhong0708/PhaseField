@@ -16,8 +16,8 @@ F.dpdphi        =  @(a,b,phi) (a==b)*2*phi(:,:,b)./sum(phi.^2,3) - 2*phi(:,:,a).
 %Make map
 Lx              =  1e-5;
 Ly              =  1e-5;
-nx              =  120;
-ny              =  120;
+nx              =  100;
+ny              =  100;
 x               =  linspace(0,Lx,nx);
 y               =  linspace(0,Ly,ny);
 

@@ -326,7 +326,7 @@ for l = 1:Nc
 end
 
 % Enforce plain mean conservation with minimal change
-E = EnforceMeanE(E, E_old, s, dt_phy);
+E = EnforceMeanE(E, E_old, dt_phy);
 
 end
 
@@ -346,26 +346,25 @@ end
 
 
 
-function E = EnforceMeanE(E, E_old, s, dt_phy)
-% Enforce conservation of plain mean(E)
+function E = EnforceMeanE(E, E_old, varargin)
+%ENFORCEMEANE Enforce exact conservation of total bulk composition.
 %
-% If s = [] or zero, then mean(E_new) = mean(E_old)
-% If s is nonzero and PDE is dE/dt = ... - s, then
-% mean(E_new) = mean(E_old) - dt * mean(s)
+% For closed / periodic / no-flux systems:
+%
+%     sum(E_new{a}) = sum(E_old{a})
+%
+% for every conserved component a.
+%
+% This is appropriate when the source term s comes from phase-fraction
+% redistribution and should not create or destroy total composition.
 
 Nc = numel(E);
 
-if nargin < 3 || isempty(s)
-    s = cell(1,Nc);
-    for a = 1:Nc
-        s{a} = zeros(size(E{a}));
-    end
+for a = 1:Nc
+    target_mean = mean(E_old{a}(:));
+    new_mean    = mean(E{a}(:));
+
+    E{a} = E{a} + (target_mean - new_mean);
 end
 
-for a = 1:Nc
-    target_mean = mean(E_old{a}(:)) - dt_phy * mean(s{a}(:));
-    new_mean    = mean(E{a}(:));
-    delta       = target_mean - new_mean;
-    E{a}        = E{a} + delta;
-end
 end

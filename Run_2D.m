@@ -25,12 +25,12 @@ disp(1/L/m)
 pause(1)
 
 %Time step
-dt_phy          =  1e-12/t_sc;
+dt_phy          =  1e-10/t_sc;
 dt_max          =    1e2/t_sc;
 dt_min          =  1e-16/t_sc; 
 t_tot           =    1e5/t_sc;
-dE_target       =  6e-3;
-dp_target       =  6e-3;
+dE_target       =  1e-2;
+dp_target       =  1e-2;
 dmu_target      =  1e5;
 time            =  0;
 
@@ -68,9 +68,17 @@ disp('Composition')
 %Time iteration
 disp([mean(E{1}(:)) mean(E{2}(:)) mean(E{3}(:)) mean(E{4}(:)) ])
 
-load 14200
-dE_target       =  3e-3;
-dp_target       =  3e-3;
+
+load 1600
+
+% Simple stable timestep controller
+dt_good_count   = 0;
+dt_grow_after   = 8;      % grow only after 8 very good accepted steps
+dt_grow_fac     = 1.15;   % slow growth
+dt_shrink_fac   = 0.5;    % fast shrink after rejection
+err_grow        = 0.25;   % only count as "good" if error < 25% of target
+dE_target       = 2e-2;
+dp_target       = 2e-2;
 
 for it = it:1e5
     
@@ -89,6 +97,7 @@ for it = it:1e5
     phio                               =  phi;
     omgo                               =  omg;
     dt_try                             =  dt_phy;
+    LE_state_old                       =  LE_state;
 
     %TRIAL
     %Build S
@@ -102,10 +111,10 @@ for it = it:1e5
     p_t                                =  Calc_p(F,phi_t);
 
     %Variable penalty
-    eta_vec                            =  kappa_from_p_smooth_full(p_t, eta, eta*0.1);
+    eta_vec                            =  kappa_from_p_smooth_full(p_t,eta,0.1*eta,4, 1e-2,4, 1e-2, 0.2*eta); 
 
     %LE at trial
-    [c_t,mu_e_t,chi_t,omg_t,LE_state]  =  LE_Run(pars, p_t, co, Eo, mu_eo, chio, eta_vec, [0.5 1000], [1 1000], LE_state);
+    [c_t,mu_e_t,chi_t,omg_t,LE_state_t]=  LE_Run(pars, p_t, co, Eo, mu_eo, chio, eta_vec, [0.5 1000], [1 1000], LE_state_old);
 
     %Diffusion source using trial p and LE-updated c
     e_t                                =  Calc_e(pars,c_t);
@@ -114,35 +123,85 @@ for it = it:1e5
     %Solve Cahn Hilliard trial
     [E_t,mu_t]                         =  PF_IMEX_Solver2D_Diffusion_MuOnly(M, kappa, dx, dy, nx, ny, Eo, mu_e_t, dt_phy, chi_t, src);
 
-    %Diagnostics on time increment
-    dE                                 =  max(abs(cell2mat(E_t)  - cell2mat(Eo)),   [], 'all');
-    dmu                                =  max(abs(cell2mat(mu_t) - cell2mat(mu_eo)), [], 'all');
+    % Final LE correction BEFORE timestep decision
+    [c_corr, mu_corr, chi_corr, omg_corr, LE_state_corr] = LE_Run(pars, p_t, c_t, E_t, mu_t, chi_t, eta_vec, [1 1000], [1 1000], LE_state_t);
+
+
+
+
+
+    dE                                 =  max(abs(cell2mat(E_t) - cell2mat(Eo)), [], 'all');
     dp                                 =  max(abs(p_t(:) - po(:)));
 
-    %Timestep for NEXT step only
-    scale                              =  min([dE_target  / max(dE,  eps), dp_target  / max(dp,  eps), dmu_target / max(dmu, eps) ]);
-    scale                              =  min(max(scale, 0.5), 1.5);
-    dt_next                            =  min(max(dt_try * scale, dt_min), dt_max);
+    Dmu                                =  abs(cell2mat(mu_corr) - cell2mat(mu_eo));
 
-    %Accept or Reject
-    if dE > dE_target || dp > dp_target || dmu > dmu_target
-        %Reject: keep accepted state unchanged
-        dt_phy   =  max(dt_try/5, dt_min);
+    % Robust dmu: ignore the largest 1% of local mu jumps
+    dmu_rob                            =  Robust_Max_1D(Dmu, 0.99);
+    dmu_hard                           =  max(Dmu, [], 'all');
+
+    err_E                              =  dE / max(dE_target, eps);
+    err_p                              =  dp / max(dp_target, eps);
+    err_mu                             =  dmu_rob / max(dmu_target, eps);
+
+    % E and p are primary evolved fields
+    err_primary                        =  max(err_E, err_p);
+
+    % mu controls dt growth, but does not always reject the step
+    err                                =  max([err_primary, err_mu]);
+
+    % Only reject for mu if the spike is not just one-grid noise
+    hard_bad_mu                        =  dmu_hard > 50*dmu_target && dmu_rob > 2*dmu_target;
+
+    dt_next                            = dt_try;
+    reject_step                        = err_primary > 1.0 || hard_bad_mu || any(~isfinite(Dmu(:)));
+
+    if reject_step
+        % Bad step: reject and shrink immediately
+        dt_next = max(dt_try * dt_shrink_fac, dt_min);
+        dt_good_count = 0;
     else
-        %Optional final LE correction at trial (p_t, E_t)
-        [c_corr,mu_corr,chi_corr,omg_corr,LE_state] =  LE_Run(pars, p_t, c_t, E_t, mu_t, chi_t, eta_vec, [0.5 1000], [1 1000], LE_state);
-        %Accept: now overwrite accepted state
-        phi      =  phi_t;
-        p        =  p_t;
-        c        =  c_corr;
-        mu_e     =  mu_corr;
-        chi      =  chi_corr;
-        omg      =  omg_corr;
-        E        =  E_t;
-        e        =  Calc_e(pars,c);
-        time     =  time + dt_try;
-        dt_phy   =  dt_next;
+        % Accepted step
+        if err < err_grow
+            dt_good_count = dt_good_count + 1;
+        else
+            dt_good_count = 0;
+        end
+        % Grow only after several very good accepted steps
+        if dt_good_count >= dt_grow_after
+            dt_next = min(dt_try * dt_grow_fac, dt_max);
+            dt_good_count = 0;
+        else
+            dt_next = dt_try;
+        end
+
     end
+
+
+    % ============================================================
+    % Accept or reject
+    % ============================================================
+
+    if reject_step
+        % Reject: keep accepted state unchanged
+        dt_phy   = dt_next;
+        LE_state = LE_state_old;
+    else
+        % Accept final LE-corrected state
+        phi      = phi_t;
+        p        = p_t;
+        c        = c_corr;
+        mu_e     = mu_corr;
+        chi      = chi_corr;
+        omg      = omg_corr;
+        E        = E_t;
+        e        = Calc_e(pars, c);
+        LE_state = LE_state_corr;
+        time     = time + dt_try;
+        dt_phy   = dt_next;
+    end
+
+
+
     toc
     
     %Plotting
@@ -157,7 +216,7 @@ for it = it:1e5
         disp([mean(mean(p(:,:,1))),mean(mean(p(:,:,2))),mean(E{1}(:))])
         subplot(331);pcolor(E{1});colorbar;shading interp;title('E1')
         subplot(332);pcolor(mu_e{1});colorbar;shading interp;title('mu_e')
-        subplot(333);pcolor(phi(:,:,1));colorbar;shading interp;title('p1')
+        subplot(333);plot(it,dt_phy,'b.');hold on;title('dt')
         subplot(334);pcolor(phase_ID);colorbar;shading interp;title('p2')
         subplot(335);pcolor(omg(:,:,1)-omg(:,:,2));colorbar;shading interp;title('domg12')
         subplot(336);pcolor(eta_vec);colorbar;shading interp;title('eta')
@@ -169,3 +228,16 @@ for it = it:1e5
 
 end
 
+
+function y = Robust_Max_1D(A, q)
+%ROBUST_MAX_1D q-quantile of abs(A), no Statistics Toolbox needed.
+v = abs(A(:));
+v = v(isfinite(v));
+if isempty(v)
+    y = inf;
+    return
+end
+v = sort(v);
+id = max(1, min(numel(v), ceil(q*numel(v))));
+y = v(id);
+end
