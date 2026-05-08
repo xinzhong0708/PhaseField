@@ -1,14 +1,15 @@
-function [s] = Calc_S_AllenCahn(phi,p,LL,F,omg)
-%Initialize
-Np = size(p,3);
-ny = size(p,1); 
-nx = size(p,2); 
-s  = repmat({zeros(ny,nx)},1,Np); 
-%Allen Cahn source
+function STATE = Calc_S_AllenCahn(STATE,PARAM,MODEL)
+%CALC_S_ALLENCAHN Allen-Cahn source term using structured variables.
+phi = STATE.phi;
+omg = STATE.omg;
+LL  = PARAM.L;
+Np  = size(phi,3);
+s   = repmat({zeros(size(phi,1),size(phi,2))},1,Np);
 for alp = 1:Np
-    s{alp}    = -LL.*F.dgdphi(phi(:,:,alp));
+    s{alp} = -LL .* MODEL.dgdphi(phi(:,:,alp));
     for beta = 1:Np
-        s{alp}=  s{alp} - LL.*F.dpdphi(alp,beta,phi).*omg(:,:,beta);
+        s{alp} = s{alp} - LL .* MODEL.dpdphi(alp,beta,phi) .* omg(:,:,beta);
     end
 end
+STATE.S_AC = s;
 end

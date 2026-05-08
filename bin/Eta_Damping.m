@@ -1,4 +1,4 @@
-function eta_eff = kappa_from_p_smooth_full(pAct, etaBulk, etaInt, q2, p02, q3, p03, etaThree)
+function eta_eff = Eta_Damping(pAct, etaBulk, etaInt, q2, p02, q3, p03, etaThree)
 % pAct: ny x nx x Np
 % etaBulk : bulk eta
 % etaInt  : eta when a 2nd phase is present
@@ -15,10 +15,10 @@ function eta_eff = kappa_from_p_smooth_full(pAct, etaBulk, etaInt, q2, p02, q3, 
 %   p03      = 1e-2
 %   etaThree = 0.2*eta or 0.3*eta
 
-if nargin < 4 || isempty(q2), q2 = 4; end
-if nargin < 5 || isempty(p02), p02 = 1e-2; end
-if nargin < 6 || isempty(q3), q3 = 4; end
-if nargin < 7 || isempty(p03), p03 = 1e-2; end
+if nargin < 4 || isempty(q2),             q2 = 4; end
+if nargin < 5 || isempty(p02),           p02 = 1e-2; end
+if nargin < 6 || isempty(q3),             q3 = 4; end
+if nargin < 7 || isempty(p03),           p03 = 1e-2; end
 if nargin < 8 || isempty(etaThree), etaThree = etaInt; end
 
 ps = sort(max(pAct,0), 3, 'descend');

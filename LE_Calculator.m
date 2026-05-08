@@ -8,17 +8,19 @@ function [c,mu_e,chi] = LE_Calculator(pars,p,c,E,eta,level)
 %level: [alpha=damping factor, Miter=maximal iteration]
 
 %Prepare
+c_init       =  c;
 Np           =  length(c);
 Ne           =  length(E);
 N            =  numel(E{1});
 alpha        =  level(1);
 Miter        =  level(2);
-c_tol        =  1e-6;
+c_tol        =  1e-5;
 
-%Line-search parameters
-MaxLS        =  10;
+%Line-search & damping parameters
+MaxLS        =  8;
 amin         =  1e-6;
-energy_tol   =  1e-10;
+energy_tol   =  1e-9;
+lam_c        =  1e-4;
 
 %Check whether any phase has internal composition degrees of freedom
 has_dof      =  false(1,Np);
@@ -50,11 +52,10 @@ for it = 1:Miter
     F_old      = LE_Objective(pars,p,c_old,E,eta);
 
     %Analytical solution of local quadratic model
-    lam_c      = 0;
     dc_all     = LE_Quadratic_Step(pars,p,c_old,E,eta,lam_c);
 
     %If proposed step is essentially zero, stop
-    dcmax = MaxAbsStep(dc_all);
+    dcmax      = MaxAbsStep(dc_all);
     if dcmax < c_tol
         break
     end
@@ -77,7 +78,7 @@ for it = 1:Miter
         good = isfinite(F_try) & (F_try <= F_old + energy_tol.*max(1,abs(F_old)));
 
         %Accept newly good nodes
-        good_new = good & ~good_node;
+        good_new            = good & ~good_node;
         alpha_acc(good_new) = alpha_try(good_new);
         good_node(good_new) = true;
 
@@ -118,7 +119,10 @@ for it = 1:Miter
 
     %If not converged, report it
     if it == Miter
-        disp('Not converged')
+        disp('Not converged, retrying LE_Calculator...')
+        %If failed recall with smaller level
+        level(1)     = 0.1;
+        [c,mu_e,chi] = LE_Calculator(pars,p,c_init,E,eta,level);
     end
 end
 

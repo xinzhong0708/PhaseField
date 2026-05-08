@@ -1,5 +1,5 @@
 %Clear and restart
-clear;figure(2);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
+clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Load map
 load Map1d.mat
@@ -9,10 +9,12 @@ t_sc            =  1;                         % Time scale vary depending on D
 L_sc            =  1;                         % Length scale, fixed to 1m (due to g=J/m3)
 
 %Physical parameters
-l               =  Lx/100/L_sc;               % interface thickness (m)
+l               =  Lx/200/L_sc;               % interface thickness (m)
 sigma           =   1.0/E_sc*L_sc^2;          % surface energy (J/m^2)
-kappa           =  1e-7/E_sc*L_sc;            % 4th order term, can be set to 0 if no solvus
-M0              =  1e-16*E_sc/L_sc^5/t_sc;    % Diffusion mobility
+kappa           =  1e-8/E_sc*L_sc;            % 4th order term, can be set to 0 if no solvus
+D_esti          =  1e-12;
+chi_ref         =  1e-2;
+M0              =  D_esti * t_sc/L_sc^2 * chi_ref;
 
 %Dependent variables
 m               =  6*sigma/l;
@@ -25,12 +27,12 @@ disp(1/L/m)
 pause(1)
 
 %Time step
-dt_phy          =   1e-9/t_sc;
+dt_phy          =   1e-4/t_sc;
 dt_max          =    1e2/t_sc;
 dt_min          =  1e-16/t_sc;
 t_tot           =    1e5/t_sc;
-dE_target       =  2e-2;
-dp_target       =  2e-2;
+dE_target       =  3e-2;
+dp_target       =  3e-2;
 dmu_target      =  1e5;
 time            =  0;
 
@@ -68,6 +70,7 @@ dt_grow_fac     = 1.10;   % slow growth
 dt_shrink_fac   = 0.5;    % fast shrink after rejection
 err_grow        = 0.25;   % only count as "good" if error < 25% of target
 
+% load temp
 for it = 1:1e6
 
     % Accepted old state

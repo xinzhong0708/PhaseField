@@ -104,13 +104,25 @@ W       = w(:,:,1) + w(:,:,2)*T + w(:,:,3)*P;   % nReal x nReal
 
 a       = alp_eff(:);                            % nReal x 1
 M       = ((a*a.') ./ (a + a.')) .* W;           % nReal x nReal
+% Optional local scaling of Margules/nonideal term
+if isfield(pars,'w_scale') && ~isempty(pars.w_scale)
+    w_scale = pars.w_scale;
+    if isscalar(w_scale)
+        w_scale = w_scale * ones(size(c_full,2),1);
+    else
+        w_scale = w_scale(:);
+    end
+    w_scale = min(max(w_scale,0),1);
+else
+    w_scale = ones(size(c_full,2),1);
+end
+
 q       = c_realt * a;                           % N x 1
 invq    = 1 ./ q;
 
 Mc      = c_realt * M;                           % N x nReal
 n_nid   = sum(Mc .* c_realt, 2);                 % N x 1
-g_nid   = n_nid .* invq;                         % N x 1
-
+g_nid   = w_scale .* (n_nid .* invq);            % N x 1
 % -------------------------------------------------------------------------
 % penalty-endmember extra energy
 %   g_pen*c_pen + penalty*sum(c_pen^2)

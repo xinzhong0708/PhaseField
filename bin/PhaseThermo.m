@@ -110,12 +110,25 @@ lz    = log(z + sz) - log(2);
 dphi_z  = lz + z ./ sz;
 d2phi_z = (z.^2 + 2*eps0.^2) ./ (sz.^3);
 
-Azt   = zt .* log(zt + double(zt==0));
+Azt     = zt .* log(zt + double(zt==0));
+g_id    = RT * sum(mtpl .* ( z .* lz - c_realt * Azt ), 2);
+alp_eff = [1 T P] * alp;
+W       = w(:,:,1) + w(:,:,2)*T + w(:,:,3)*P;
 
-g_id  = RT * sum(mtpl .* ( z .* lz - c_realt * Azt ), 2);
-
-alp_eff = [1 T P] * alp;                         % 1 x nReal
-W       = w(:,:,1) + w(:,:,2)*T + w(:,:,3)*P;   % nReal x nReal
+% Optional local scaling of Margules/nonideal term.
+% This allows interface-convexified thermodynamics:
+% W_eff = w_scale(x) * W
+if isfield(pars,'w_scale') && ~isempty(pars.w_scale)
+    w_scale = pars.w_scale;
+    if isscalar(w_scale)
+        w_scale = w_scale * ones(Npt,1);
+    else
+        w_scale = w_scale(:);
+    end
+    w_scale = min(max(w_scale,0),1);
+else
+    w_scale = ones(Npt,1);
+end
 
 a       = alp_eff(:);                            % nReal x 1
 M       = ((a*a.') ./ (a + a.')) .* W;           % nReal x nReal
@@ -128,7 +141,7 @@ Mc      = c_realt * M;                           % N x nReal
 n_nid   = sum(Mc .* c_realt, 2);                 % N x 1
 B       = M + M.';                               % nReal x nReal
 v       = c_realt * B.';                         % N x nReal
-g_nid   = n_nid .* invq;                         % N x 1
+g_nid   = w_scale .* (n_nid .* invq); 
 
 % -------------------------------------------------------------------------
 % penalty contribution
@@ -162,8 +175,8 @@ g        = G_scaled .* invcat;      % N x 1
 % -------------------------------------------------------------------------
 
 % REAL block dG/dc_real
-mu_nid  = v .* invq - (n_nid .* invq2) .* a.';      % N x nReal
-mu_mech = g0.';                                      % 1 x nReal
+mu_nid  = w_scale .* (v .* invq - (n_nid .* invq2) .* a.');
+mu_mech = g0.';
 mu_id   = RT * ( (mtpl .* dphi_z) * zt.' - mtpl * Azt.' );
 
 dG_real = mu_mech + mu_id + mu_nid;                  % N x nReal
@@ -239,11 +252,10 @@ aaT     = a * a.';
 term2   = reshape(a,nReal,1,1) .* reshape(vT,1,nReal,Npt) ...
         + reshape(vT,nReal,1,Npt) .* reshape(a.',1,nReal,1);
 
-H_nid   = B .* reshape(invq,1,1,Npt) ...
-        - term2 .* reshape(invq2,1,1,Npt) ...
-        + aaT .* reshape(2*n_nid .* invq3,1,1,Npt);
+H_nid   = B .* reshape(invq,1,1,Npt) - term2 .* reshape(invq2,1,1,Npt) + aaT .* reshape(2*n_nid .* invq3,1,1,Npt);
 
-H_real_full = (H_id + H_nid) * scale;    % nReal x nReal x N
+H_nid = H_nid .* reshape(w_scale,1,1,Npt);
+H_real_full = (H_id + H_nid) * scale;
 
 % PEN-PEN Hessian
 H_pen_full = zeros(nPen,nPen,Npt);

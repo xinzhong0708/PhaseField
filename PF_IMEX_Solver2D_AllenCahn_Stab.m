@@ -1,5 +1,15 @@
-function STATE = PF_IMEX_Solver2D_AllenCahn(STATE,MODEL,PARAM,GRID,NUM,Norm)
-%PF_IMEX_SOLVER2D_ALLENCAHN Solve Allen-Cahn update using structured inputs.
+function STATE = PF_IMEX_Solver2D_AllenCahn_Stab(STATE,MODEL,PARAM,GRID,NUM,Norm)
+%PF_IMEX_SOLVER2D_ALLENCAHN_STAB
+% Stabilized semi-implicit Allen-Cahn update.
+%
+% Original:
+%   (1/dt - LK*Lap) phi_new = phi_old/dt + S_old
+%
+% Stabilized:
+%   (1/dt + A_ac - LK*Lap) phi_new =
+%       phi_old/dt + S_old + A_ac*phi_old
+%
+% A_ac is a positive stabilizer approximating local source stiffness.
 
 LK     = PARAM.LK;
 dx     = GRID.dx;
@@ -13,6 +23,28 @@ mask   = logical(STATE.mask);
 
 Np         = size(phi,3);
 LKvec_full = LK(:);
+
+% -------------------------------------------------------------------------
+% Stabilization field
+% PARAM.A_ac can be:
+%   scalar
+%   ny x nx
+%   ny x nx x Np
+% PARAM.A_SC is accepted as alternative name
+% -------------------------------------------------------------------------
+if isfield(PARAM,'A_ac')
+    Aac = PARAM.A_ac;
+elseif isfield(PARAM,'A_SC')
+    Aac = PARAM.A_SC;
+else
+    Aac = 0;
+end
+
+if isscalar(Aac)
+    Aac = Aac*ones(ny,nx,Np);
+elseif ndims(Aac) == 2
+    Aac = repmat(Aac,1,1,Np);
+end
 
 tol_direct = 40000;
 tol_iter   = 1e-10;
@@ -32,6 +64,11 @@ for ip = 1:Np
     phi_old = phi(:,:,ip);
     phi_vec = phi_old(:);
     s_vec   = s{ip}(:);
+
+    % Stabilization vector for this phase
+    Aac_p        = Aac(:,:,ip);
+    Aac_vec_full = Aac_p(:);
+    Aac_act      = Aac_vec_full(act_lin);
 
     [ia,ja] = ind2sub([ny,nx],act_lin);
 
@@ -67,9 +104,27 @@ for ip = 1:Np
     coefU(hasU) = -(LKvec_full(indU(hasU)) + LKc(hasU))/2/dy^2;
     coefD(hasD) = -(LKvec_full(indD(hasD)) + LKc(hasD))/2/dy^2;
 
-    coefC = -(coefL + coefR + coefU + coefD) + 1/dt_phy;
+    % ---------------------------------------------------------------------
+    % Stabilized diagonal:
+    %
+    % old:
+    %   coefC = -(coefL + coefR + coefU + coefD) + 1/dt
+    %
+    % new:
+    %   coefC = -(coefL + coefR + coefU + coefD) + 1/dt + A_ac
+    % ---------------------------------------------------------------------
+    coefC = -(coefL + coefR + coefU + coefD) + 1/dt_phy + Aac_act;
 
-    RHS = phi_vec(act_lin)/dt_phy + s_vec(act_lin);
+    % ---------------------------------------------------------------------
+    % Stabilized RHS:
+    %
+    % old:
+    %   RHS = phi_old/dt + S_old
+    %
+    % new:
+    %   RHS = phi_old/dt + S_old + A_ac*phi_old
+    % ---------------------------------------------------------------------
+    RHS = phi_vec(act_lin)/dt_phy + s_vec(act_lin) + Aac_act.*phi_vec(act_lin);
 
     est_nnz = 5*Nact;
     rows    = zeros(est_nnz,1);
@@ -134,13 +189,13 @@ for ip = 1:Np
     cols = cols(1:ptr-1);
     vals = vals(1:ptr-1);
 
-    L = sparse(rows,cols,vals,Nact,Nact);
+    Lmat = sparse(rows,cols,vals,Nact,Nact);
 
     x0 = phi_vec(act_lin);
 
     if Nact <= tol_direct
 
-        x = L \ RHS;
+        x = Lmat \ RHS;
 
     else
 
@@ -149,41 +204,41 @@ for ip = 1:Np
             opts.droptol  = 1e-3;
             opts.diagcomp = 1e-3;
 
-            Lpre = ichol(L,opts);
+            Lpre = ichol(Lmat,opts);
 
-            [x,flag] = pcg(L,RHS,tol_iter,maxit,Lpre,Lpre',x0);
+            [x,flag] = pcg(Lmat,RHS,tol_iter,maxit,Lpre,Lpre',x0);
 
             if flag ~= 0
                 warning('pcg not converged, use direct solver');
-                x = L \ RHS;
+                x = Lmat \ RHS;
             end
 
         catch
 
-            x = L \ RHS;
+            x = Lmat \ RHS;
 
         end
 
     end
 
-    phi_new          = zeros(ny*nx,1);
-    phi_new(act_lin) = x;
+    phi_new           = zeros(ny*nx,1);
+    phi_new(act_lin)  = x;
 
-    tmp          = reshape(phi_new,ny,nx);
-    tmp(~mask_p) = 0;
+    tmp               = reshape(phi_new,ny,nx);
+    tmp(~mask_p)      = 0;
 
-    phi(:,:,ip) = tmp;
+    phi(:,:,ip)       = tmp;
 
 end
 
-%Normalization
-if Norm==1
-    phi         = Norm_Phi(phi);
+% Normalization
+if Norm == 1
+    phi = Norm_Phi(phi);
 end
 
 STATE.phi = phi;
 
-%Update p
-STATE.p   = Calc_p(MODEL,phi);
+% Update p
+STATE.p = Calc_p(MODEL,phi);
 
 end

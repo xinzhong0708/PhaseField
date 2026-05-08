@@ -1,78 +1,144 @@
-function [c,mu_e,chi,omg,LE_state] = LE_Run(pars,p,c,E,mu_e,chi,eta_vec,level1,level2,LE_state)
+function STATE = LE_Run(STATE,PARAM,MODEL)
+%LE_RUN Local-equilibrium update using structured variables.
 
-if nargin < 10 || isempty(LE_state)
+%Unpack structured variables
+pars     = MODEL.pars;
+p        = STATE.p;
+c        = STATE.c;
+E        = STATE.E;
+mu_e     = STATE.mu_e;
+chi      = STATE.chi;
+eta_vec  = PARAM.eta(:);
+LE_state = STATE.LE_state;
+
+if isempty(LE_state)
     LE_state = struct();
 end
-%Reshape 2D into 1D
-nx         = size(p,2);
-ny         = size(p,1);
-c          = Unpack_c(c);
-E          = Unpack_E(E);
-p          = Unpack_p(p);
-mu_e       = Unpack_E(mu_e);
-chi        = Unpack_Chi(chi);
-eta_vec    = eta_vec(:);
 
-Pmax       = 4;
-pmin       = 3e-2;
+%Reshape 2D into 1D
+nx      = size(p,2);
+ny      = size(p,1);
+c       = Unpack_c(c);
+E       = Unpack_E(E);
+p       = Unpack_p(p);
+mu_e    = Unpack_E(mu_e);
+chi     = Unpack_Chi(chi);
+
+Pmax    = 4;
+
+%Thermodynamic interpolation thresholds
+p_tail  = 1e-4;
+p_full  = 5e-4;
+p_th    = Calc_Thermo_p(p,p_tail,p_full);
+pmin    = 3e-4;
+
+%Interface w damping
+dp1     = 0.85;
+dp2     = 0.99;
 
 %Hysteresis thresholds
-p_on       = pmin;
-p_off      = 0.5*pmin;
+p_on    = pmin;
+p_off   = 0.5*pmin;
 
-Np         = numel(c);
-N          = numel(c{1}{1});
+Np      = numel(c);
+N       = numel(c{1}{1});
 
-%Build p matrix
-pMat       = zeros(N,Np);
+%Build raw p matrix and thermodynamic p matrix
+pMat    = zeros(N,Np);
+pThMat  = zeros(N,Np);
+
 for ip = 1:Np
+
     p_ip          = squeeze(p(:,:,ip));
     pMat(:,ip)   = p_ip(:);
+
+    p_th_ip       = squeeze(p_th(:,:,ip));
+    pThMat(:,ip) = p_th_ip(:);
+
 end
 
 %Initialize hysteresis active set
-if ~isfield(LE_state,'active') || isempty(LE_state.active) || ~isequal(size(LE_state.active),[N,Np])
-    LE_state.active = pMat > p_on;
+if isempty(LE_state) || ~isfield(LE_state,'active') || isempty(LE_state.active) || ~isequal(size(LE_state.active),[N,Np])
+
+    LE_state.active = pThMat > p_on;
+
     % Make sure every grid point has at least one active phase
     for i = 1:N
+
         if ~any(LE_state.active(i,:))
-            [~,idmax]              = max(pMat(i,:));
+
+            [~,idmax] = max(pThMat(i,:));
+
+            if pThMat(i,idmax) <= 0
+                [~,idmax] = max(pMat(i,:));
+            end
+
             LE_state.active(i,idmax) = true;
+
         end
+
     end
+
 end
 
-% Update hysteresis active set
+%Update hysteresis active set
 active_old = LE_state.active;
 active_new = false(N,Np);
+
 for i = 1:N
+
     for ip = 1:Np
+
         if active_old(i,ip)
-            % Active phase remains active until p drops below p_off
-            active_new(i,ip) = pMat(i,ip) > p_off;
+
+            % Active phase remains active until thermodynamic weight drops below p_off
+            active_new(i,ip) = pThMat(i,ip) > p_off;
+
         else
-            % Inactive phase becomes active only when p rises above p_on
-            active_new(i,ip) = pMat(i,ip) > p_on;
+
+            % Inactive phase becomes active only when thermodynamic weight rises above p_on
+            active_new(i,ip) = pThMat(i,ip) > p_on;
+
         end
+
     end
+
     %Make sure every grid point has at least one active phase
     if ~any(active_new(i,:))
-        [~,idmax]            = max(pMat(i,:));
-        active_new(i,idmax)  = true;
+
+        [~,idmax] = max(pThMat(i,:));
+
+        if pThMat(i,idmax) <= 0
+            [~,idmax] = max(pMat(i,:));
+        end
+
+        active_new(i,idmax) = true;
+
     end
 
     %Limit maximum number of active phases
     if sum(active_new(i,:)) > Pmax
-        score                = pMat(i,:);
+
+        score = pThMat(i,:);
+
         %Favor phases that were already active
         score(active_old(i,:)) = score(active_old(i,:)) + 0.5*p_on;
-        [~,ord]              = sort(score,'descend');
-        tmp                  = false(1,Np);
-        tmp(ord(1:Pmax))     = true;
-        active_new(i,:)      = tmp;
+
+        [~,ord] = sort(score,'descend');
+
+        tmp = false(1,Np);
+        tmp(ord(1:Pmax)) = true;
+
+        active_new(i,:) = tmp;
+
     end
+
 end
+
 LE_state.active = active_new;
+
+%Store for diagnostics
+LE_state.p_th = p_th;
 
 %Handle all active subsets of size 1,2,3,4
 for k = 1:min([Np,Pmax])
@@ -85,16 +151,23 @@ for k = 1:min([Np,Pmax])
 
         %Mask: active phases follow hysteresis state
         mask = true(1,N);
+
         for ip = 1:Np
+
             if ismember(ip, ph_act)
+
                 mask = mask & LE_state.active(:,ip).';
+
             else
+
                 mask = mask & ~LE_state.active(:,ip).';
+
             end
+
         end
-        
+
         %Only calculate when mask exist
-        if ~any(mask);  continue;  end
+        if ~any(mask); continue; end
 
         %Slice local fields
         c_cur = Slice_c(c, ph_act, mask);
@@ -104,37 +177,44 @@ for k = 1:min([Np,Pmax])
         %One phase
         if k == 1
             ip                     = ph_act(1);
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ip), ones(size(c_cur{1}{1})), c_cur(1), E_cur, eta, level2);
-            [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi,  c_tmp, mu_tmp, chi_tmp, ip, mask);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ip), ones(size(c_cur{1}{1})), c_cur(1), E_cur, eta, [0.8,100]);
+            [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ip, mask);
         end
 
         %Two phase
         if k == 2
-            p_cur                  = Norm_Phi(p(:,mask,ph_act));
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ph_act), p_cur, c_cur, E_cur, eta, [0.3,1000]);
+            p_cur                  = p_th(:,mask,ph_act);
+            pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.5,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
         %Three phase
         if k == 3
-            p_cur                  = Norm_Phi(p(:,mask,ph_act));
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ph_act), p_cur, c_cur, E_cur, eta, [0.2,1000]);
+            p_cur                  = p_th(:,mask,ph_act);
+            pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.3,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
         %Four phase
         if k == 4
-            p_cur                  = Norm_Phi(p(:,mask,ph_act));
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ph_act), p_cur, c_cur, E_cur, eta, [0.1,1000]);
+            p_cur                  = p_th(:,mask,ph_act);
+            pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.2,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
+
     end
+
 end
 
 %Pack up
-g = cell(1,Np);
+g      = cell(1,Np);
+pars_g = Apply_WScale_FromP(pars,p,dp1,dp2,1);
+
 for ip = 1:Np
-    g{ip} = reshape(PhaseG(pars{ip}, c{ip}), ny, []);
+    g{ip} = reshape(PhaseG(pars_g{ip}, c{ip}), ny, []);
 end
 
 c     = Pack_c(c, ny);
@@ -145,12 +225,85 @@ e     = Calc_e(pars, c);
 %Calculate omega
 Ne    = length(E);
 omg   = ones(ny, nx, Np);
+
 for ip = 1:Np
+
     omg(:,:,ip) = g{ip};
+
     for ie = 1:Ne
         omg(:,:,ip) = omg(:,:,ip) - e{ip}{ie} .* mu_e{ie};
     end
-end
 
 end
 
+%Write back to STATE
+STATE.c        = c;
+STATE.e        = e;
+STATE.mu_e     = mu_e;
+STATE.chi      = chi;
+STATE.omg      = omg;
+STATE.LE_state = LE_state;
+
+end
+
+
+function p_th = Calc_Thermo_p(p,p_tail,p_full)
+%CALC_THERMO_P Calculate thermodynamic phase weights from geometric p.
+%
+% Raw p is the geometric phase fraction.
+% p_th is the thermodynamic phase weight.
+%
+% A tiny phase-field tail has small or zero thermodynamic weight.
+% This avoids forcing local equilibrium on infinitesimal phase tails.
+
+if p_full <= p_tail
+    error('p_full must be larger than p_tail')
+end
+
+Np = size(p,3);
+
+x = (p - p_tail) ./ max(p_full - p_tail,eps);
+x = min(max(x,0),1);
+
+%Smoothstep activation
+a = x.^2 .* (3 - 2*x);
+
+%Unnormalized thermodynamic weight
+w = p .* a;
+
+wsum = sum(w,3);
+
+p_th = zeros(size(p));
+
+%Normal case
+good = wsum > eps;
+
+for ip = 1:Np
+
+    tmp = zeros(size(p(:,:,ip)));
+    wi = w(:,:,ip);
+
+    tmp(good) = wi(good) ./ wsum(good);
+
+    p_th(:,:,ip) = tmp;
+
+end
+
+%Fallback: if all weights are zero, assign the dominant geometric phase
+bad = ~good;
+
+if any(bad(:))
+
+    [~,idmax] = max(p,[],3);
+
+    for ip = 1:Np
+
+        tmp = p_th(:,:,ip);
+        tmp(bad & idmax == ip) = 1;
+        p_th(:,:,ip) = tmp;
+
+    end
+
+end
+
+end
