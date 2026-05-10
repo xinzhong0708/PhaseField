@@ -1,7 +1,7 @@
 clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Pressure Temperature
-T              =  800 + 273.15;    % K
+T              =  950 + 273.15;    % K
 P              =  1e9;             % Pa
 E_sc           =  1e8;             % J
 vref           =  2e-5;            % m3/mol

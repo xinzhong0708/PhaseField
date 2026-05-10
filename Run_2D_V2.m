@@ -10,18 +10,18 @@ PHYS.t_sc          =  1;                                                   % Tim
 PHYS.L_sc          =  1;                                                   % Length scale
 PHYS.l             =  Lx/200/L_sc;                                         % interface thickness (m)
 PHYS.sigma         =  1.0/PHYS.E_sc*PHYS.L_sc^2;                           % surface energy (J/m^2)
-PHYS.kappa         =  5e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
+PHYS.kappa         =  0e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
 PHYS.D_esti        =  1e-12;
 PHYS.chi_ref       =  1e-2;
 PHYS.M0            =  PHYS.D_esti*PHYS.t_sc/PHYS.L_sc^2*PHYS.chi_ref;
 PHYS.m             =  6*PHYS.sigma/PHYS.l;
 PHYS.kap           =  3/4*PHYS.sigma*PHYS.l;
-PHYS.dceq          =  0.5;
-PHYS.L             =  4*PHYS.m/3/PHYS.kap/(4*PHYS.dceq^2/PHYS.M0)/10;
+PHYS.dceq          =  0.2;
+PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/50;
 PHYS.eta           =  eta;
 
 %NUMERICS
-NUM.dt_phy         =   1e-4/PHYS.t_sc;
+NUM.dt_phy         =   1e-5/PHYS.t_sc;
 NUM.dt_max         =    1e5/PHYS.t_sc;
 NUM.dt_min         =  1e-16/PHYS.t_sc; 
 NUM.t_tot          =    1e5/PHYS.t_sc;
@@ -68,10 +68,6 @@ STATE.mask         =  ones(ny,nx,Np);
 STATE.LE_state     = [   ];
 
 %TIME STEPPING
-% load 400
-% NUM.dE_target      =  0.05;
-% NUM.dp_target      =  0.05;
-
 for it = 1:1e5
     if mod(it,100)==0
         save(num2str(it))
@@ -87,7 +83,6 @@ for it = 1:1e5
     %ALLEN CAHN
     STATE_TRIAL          =    Calc_S_AllenCahn(STATE_TRIAL,PARAM,MODEL);
     STATE_TRIAL          =    PF_IMEX_Solver2D_AllenCahn_Stab(STATE_TRIAL,MODEL,PARAM,GRID,NUM,1);
-    % STATE_TRIAL          =    PF_IMEX_Solver2D_AllenCahn(STATE_TRIAL,MODEL,PARAM,GRID,NUM,1);
 
     %INTERFACE PENALTY
     PARAM.eta            =    Eta_Damping(STATE_TRIAL.p,PHYS.eta,0.5*PHYS.eta); 
@@ -101,7 +96,6 @@ for it = 1:1e5
 
     %TIME STEP UPDATE
     [STATE,NUM,DIAG]     =    Update_TimeStep_Soft(STATE,STATE_TRIAL,PARAM,MODEL,NUM);
-
 
 
     %Plotting
@@ -125,64 +119,5 @@ for it = 1:1e5
         drawnow
     end
 
-    % %2D
-    % if mod(it,2)==0
-    %     disp(NUM.dt_phy)
-    %     disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(STATE.E{1}(:))])
-    %     subplot(331);pcolor(STATE.E{1});colorbar;shading interp;title('E1')
-    %     subplot(332);pcolor(STATE.mu_e{1});colorbar;shading interp;title('mu_e')
-    %     subplot(333);plot(it,NUM.dt_phy,'b.');hold on;title('dt')
-    %     subplot(334);pcolor(STATE.p(:,:,2));colorbar;shading interp;title('p2')        
-    %     subplot(335);pcolor(STATE.omg(:,:,1)-STATE.omg(:,:,2));colorbar;shading interp;title('domg12')
-    %     subplot(336);pcolor(PARAM.eta);colorbar;shading interp;title('eta')
-    %     subplot(337);pcolor(STATE.c{1}{1});colorbar;shading interp;title('c11')
-    %     subplot(338);pcolor(STATE.c{2}{1});colorbar;shading interp;title('c21')
-    %     subplot(339);plot(TIME,PHASE2,'.-');title('Phase2')
-    %     drawnow
-    % end
-
 end
 
-
-
-
-
-
-
-function STATE = AC_Relax_FrozenOmega(STATE,PARAM,MODEL,GRID,NUM)
-
-% Save physical dt
-dt_macro = NUM.dt_phy;
-
-% Pseudo-time settings
-nrelax       = 5;       % start with 3-10
-dp_relax_tol = 1e-4;
-
-NUM_PHI = NUM;
-
-for ir = 1:nrelax
-
-    phi_old = STATE.phi;
-
-    % Use pseudo dt, not physical macro dt
-    NUM_PHI.dt_phy = min(dt_macro, PARAM.dt_phi_relax);
-
-    % Recompute AC source with frozen or current omega
-    STATE = Calc_S_AllenCahn(STATE,PARAM,MODEL);
-
-    % Stabilized AC solver
-    STATE = PF_IMEX_Solver2D_AllenCahn_Stab(STATE,MODEL,PARAM,GRID,NUM_PHI,1);
-
-    % Update p
-    STATE.p = Calc_p(MODEL,STATE.phi);
-
-    % Stop if relaxed
-    dphi = max(abs(STATE.phi(:)-phi_old(:)));
-
-    if dphi < dp_relax_tol
-        break
-    end
-
-end
-
-end
