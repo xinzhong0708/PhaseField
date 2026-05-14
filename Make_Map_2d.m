@@ -14,12 +14,13 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;     % legacy save
 L_sc             = PHYS.L_sc;     % legacy save
 
-eta0             = 1000e10/E_sc;
+eta0             = 2000e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data
 % -------------------------------------------------------------------------
-pars             = Load_Data({'Olv','Cpx','Grt','Qtz'});
+% pars             = Load_Data({'Olv','Cpx','Grt','Qtz'});
+pars             = Load_Data({'Cpx','Grt','Qtz'});
 
 Np               = length(pars);
 
@@ -44,11 +45,11 @@ F                = MODEL;
 %% ------------------------------------------------------------------------
 %  Grid
 % -------------------------------------------------------------------------
-Lx               = 1e-5;
-Ly               = 1e-5;
+Lx               = 5e-6;
+Ly               = 5e-6;
 
-nx               = 200;
-ny               = 5;
+nx               = 300;
+ny               = 4;
 
 x                = linspace(0,Lx,nx);
 y                = linspace(0,Ly,ny);
@@ -77,35 +78,36 @@ GRID.Ly          = Ly/L_sc;
 % -------------------------------------------------------------------------
 c                = cell(1,Np);
 
-% Olv
-c{1}{1}          = 0.0063*ones(ny,nx);
-c{1}{2}          = 0.2597*ones(ny,nx);
-c{1}{3}          = 0.5133*ones(ny,nx);
+% % Olv
+% c{1}{1}          = 0.0063*ones(ny,nx);
+% c{1}{2}          = 0.2597*ones(ny,nx);
+% c{1}{3}          = 0.5133*ones(ny,nx);
 
 % Cpx
-c{2}{1}          = 0.0200*ones(ny,nx);
-c{2}{2}          = 0.1200*ones(ny,nx);
-c{2}{3}          = 0.0300*ones(ny,nx);
-c{2}{4}          = 0.6000*ones(ny,nx);
+c{1}{1}          = 0.0200*ones(ny,nx);
+c{1}{2}          = 0.1200*ones(ny,nx);
+c{1}{3}          = 0.0300*ones(ny,nx);
+c{1}{4}          = 0.6000*ones(ny,nx);
 
 % Grt
-c{3}{1}          = 0.4818*ones(ny,nx);
-c{3}{2}          = 0.3943*ones(ny,nx);
+c{2}{1}          = 0.4818*ones(ny,nx);
+c{2}{2}          = 0.3943*ones(ny,nx);
 
 % Qtz
-c{4}{1}          = 1.0000*ones(ny,nx);
+c{3}{1}          = 1.0000*ones(ny,nx);
+
 
 %% ------------------------------------------------------------------------
 %  Initial phase field
 % -------------------------------------------------------------------------
 phi              = zeros(ny,nx,Np);
 
-md               = nx/4;
+md               = nx/3;
 
 phi(:,1:md,1)              = 1;
 phi(:,1*md+1:2*md,2)       = 1;
 phi(:,2*md+1:3*md,3)       = 1;
-phi(:,3*md+1:4*md,4)       = 1;
+% phi(:,3*md+1:4*md,4)       = 1;
 
 % In case nx is not exactly divisible by 4, assign remaining cells to phase 4
 if 4*md < nx
@@ -284,7 +286,9 @@ save('Map2d.mat', ...
     'pars','E_sc','Lx','Ly','c','E','e','p','phi','eta','mu_e','chi', ...
     'x','dx','nx','y','dy','ny','L_sc','F','Np','Ne')
 
-fprintf('Saved structured Map2d.mat\n')
+
+plot(GRID.x,STATE.c{1}{1}(3,:),GRID.x,STATE.c{1}{2}(3,:),GRID.x,STATE.c{1}{3}(3,:),GRID.x,STATE.c{1}{4}(3,:));title('c21')
+
 
 %% ========================================================================
 %  Local helper functions

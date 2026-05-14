@@ -13,7 +13,7 @@ Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 %Phases
 phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz'};
 phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   };
-scale          =  1;
+scale          =  0.1;
 for ip = 1:6
 
     %Phase
@@ -30,7 +30,7 @@ for ip = 1:6
         n(4  ,3  )   =  n(4  ,3  )+1e-3*scale;
         gN           = [];
         nN           = [];
-        penalty      =  1e8;
+        penalty      =  0;
         rank([n ; nN])
     end
     if strcmp(phase_short{ip},'Cpx')==1
@@ -40,13 +40,13 @@ for ip = 1:6
         n(4  ,end)   =  n(4  ,end)+3e-3*scale;
         gN           = [];
         nN           = [];
-        penalty      =  1e8;
+        penalty      =  0;
         rank([n ; nN])
     end
     if strcmp(phase_short{ip},'Opx')==1
         gN           = [];
         nN           = [];
-        penalty      =  1e8;
+        penalty      =  0;
         rank([n ; nN])
     end
     if strcmp(phase_short{ip},'Grt')==1
@@ -55,19 +55,19 @@ for ip = 1:6
         n(3  ,end)   =  n(3  ,end)+2e-3*scale;
         gN           = [];
         nN           = [];
-        penalty      =  1e8;
+        penalty      =  0;
         rank([n ; nN])
     end
     if strcmp(phase_short{ip},'Cor')==1
         gN           = [];
         nN           = [];
-        penalty      =  1e7;
+        penalty      =  0;
         rank([n ; nN])
     end
     if strcmp(phase_short{ip},'Qtz')==1
         gN           = [];
         nN           = [];
-        penalty      =  1e8;
+        penalty      =  0;
         rank([n ; nN])
     end
 

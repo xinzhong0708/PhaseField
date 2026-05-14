@@ -185,6 +185,7 @@ for k = 1:min([Np,Pmax])
         if k == 2
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
+            % pars_inter             = pars;
             [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.5,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
@@ -212,6 +213,9 @@ end
 %Pack up
 g      = cell(1,Np);
 pars_g = Apply_WScale_FromP(pars,p,dp1,dp2,1);
+
+% %Original
+% pars_g = pars;
 
 for ip = 1:Np
     g{ip} = reshape(PhaseG(pars_g{ip}, c{ip}), ny, []);
