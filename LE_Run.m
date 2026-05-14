@@ -27,10 +27,10 @@ chi     = Unpack_Chi(chi);
 Pmax    = 4;
 
 %Thermodynamic interpolation thresholds
-p_tail  = 1e-4;
-p_full  = 5e-4;
+p_tail  = 1e-3;
+p_full  = 5e-3;
 p_th    = Calc_Thermo_p(p,p_tail,p_full);
-pmin    = 3e-4;
+pmin    = 3e-3;
 
 %Interface w damping
 dp1     = 0.85;

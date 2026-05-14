@@ -13,7 +13,7 @@ Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 %Phases
 phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz'};
 phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   };
-scale          =  0.1;
+scale          =  1;
 for ip = 1:6
 
     %Phase

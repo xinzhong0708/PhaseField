@@ -10,14 +10,14 @@ PHYS.t_sc          =  1;                                                   % Tim
 PHYS.L_sc          =  1;                                                   % Length scale
 PHYS.l             =  Lx/150/L_sc;                                         % interface thickness (m)
 PHYS.sigma         =  0.3/PHYS.E_sc*PHYS.L_sc^2;                           % surface energy (J/m^2)
-PHYS.kappa         =  1e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
+PHYS.kappa         =  0e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
 PHYS.D_esti        =  1e-12;
 PHYS.chi_ref       =  1e-2;
 PHYS.M0            =  PHYS.D_esti*PHYS.t_sc/PHYS.L_sc^2*PHYS.chi_ref;
 PHYS.m             =  6*PHYS.sigma/PHYS.l;
 PHYS.kap           =  3/4*PHYS.sigma*PHYS.l;
 PHYS.dceq          =  0.2;
-PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/2000;
+PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/1000;
 PHYS.eta           =  eta;
 
 %NUMERICS
@@ -70,11 +70,8 @@ STATE.LE_state     = [   ];
 %DISPLAY COMPOSITION
 
 disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{end},'all')])
-% NUM.dE_target      =  3e-3;
-% NUM.dp_target      =  3e-3;
 
-load 1000
-for it = it:1e5
+for it = 1:1e5
     if mod(it,100)==0
         save(num2str(it))
     end

@@ -14,7 +14,7 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;     % legacy save
 L_sc             = PHYS.L_sc;     % legacy save
 
-eta0             = 2000e10/E_sc;
+eta0             = 1000e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data
@@ -142,7 +142,7 @@ PARAM.eta        = eta;
 %  Pair-pair initialization in pure phase regions
 % -------------------------------------------------------------------------
 tol_pure         = 1e-12;
-p_pair           = 5e-2;
+p_pair           = 0.1;
 
 for ip = 1:Np
 
