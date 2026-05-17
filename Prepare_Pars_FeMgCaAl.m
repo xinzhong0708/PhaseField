@@ -1,20 +1,20 @@
 clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Pressure Temperature
-T              =  950 + 273.15;    % K
+T              =  700 + 273.15;    % K
 P              =  1e9;             % Pa
-E_sc           =  1e8;             % J
+E_sc           =  1e9;             % J
 vref           =  2e-5;            % m3/mol
 
 %Elements
-solmod         = 'solution_models_H18';
+solmod         = 'solution_models_PFM';
 Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 
 %Phases
-phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz'};
-phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   };
+phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel'};
+phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Crd'     ,'Spl'   };
 scale          =  1;
-for ip = 1:6
+for ip = 1:length(phase_all)
 
     %Phase
     phs_name       =  phase_all(ip);
@@ -65,6 +65,18 @@ for ip = 1:6
         rank([n ; nN])
     end
     if strcmp(phase_short{ip},'Qtz')==1
+        gN           = [];
+        nN           = [];
+        penalty      =  0;
+        rank([n ; nN])
+    end
+    if strcmp(phase_short{ip},'Spl')==1
+        gN           = [];
+        nN           = [];
+        penalty      =  0;
+        rank([n ; nN])
+    end
+    if strcmp(phase_short{ip},'Crd')==1
         gN           = [];
         nN           = [];
         penalty      =  0;

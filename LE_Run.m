@@ -27,18 +27,17 @@ chi     = Unpack_Chi(chi);
 Pmax    = 4;
 
 %Thermodynamic interpolation thresholds
-p_tail  = 1e-3;
+p_tail  = 1e-4;
 p_full  = 5e-3;
+
+p_on    = 5e-4;
+p_off   = 5e-5;
+
 p_th    = Calc_Thermo_p(p,p_tail,p_full);
-pmin    = 3e-3;
 
 %Interface w damping
 dp1     = 0.85;
 dp2     = 0.99;
-
-%Hysteresis thresholds
-p_on    = pmin;
-p_off   = 0.5*pmin;
 
 Np      = numel(c);
 N       = numel(c{1}{1});
@@ -186,7 +185,7 @@ for k = 1:min([Np,Pmax])
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
             % pars_inter             = pars;
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.5,1000]);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.6,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
@@ -194,7 +193,8 @@ for k = 1:min([Np,Pmax])
         if k == 3
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.3,1000]);
+            % pars_inter             = pars;
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.4,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
@@ -202,6 +202,7 @@ for k = 1:min([Np,Pmax])
         if k == 4
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
+            % pars_inter             = pars;
             [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.2,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
@@ -212,13 +213,10 @@ end
 
 %Pack up
 g      = cell(1,Np);
-pars_g = Apply_WScale_FromP(pars,p,dp1,dp2,1);
 
-% %Original
-% pars_g = pars;
-
+%Use original g with excess energy to keep consistent with GEM
 for ip = 1:Np
-    g{ip} = reshape(PhaseG(pars_g{ip}, c{ip}), ny, []);
+    g{ip} = reshape(PhaseG(pars{ip}, c{ip}), ny, []);
 end
 
 c     = Pack_c(c, ny);
@@ -231,9 +229,7 @@ Ne    = length(E);
 omg   = ones(ny, nx, Np);
 
 for ip = 1:Np
-
     omg(:,:,ip) = g{ip};
-
     for ie = 1:Ne
         omg(:,:,ip) = omg(:,:,ip) - e{ip}{ie} .* mu_e{ie};
     end

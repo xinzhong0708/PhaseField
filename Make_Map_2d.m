@@ -1,5 +1,5 @@
 %% Clear and restart
-clear; figure(1); clf
+clear; figure(3); clf
 addpath([cd,'\bin'])
 addpath([cd,'\Thermo'])
 addpath([cd,'\Thermo\Solutions'])
@@ -8,7 +8,7 @@ addpath([cd,'\Thermo\Solutions'])
 %  Scaling / basic physical constants used by the map
 % -------------------------------------------------------------------------
 PHYS             = struct();
-PHYS.E_sc        = 1e8;
+PHYS.E_sc        = 1e9;
 PHYS.L_sc        = 1;
 
 E_sc             = PHYS.E_sc;     % legacy save
@@ -19,8 +19,8 @@ eta0             = 1000e10/E_sc;
 %% ------------------------------------------------------------------------
 %  Thermodynamic data
 % -------------------------------------------------------------------------
-% pars             = Load_Data({'Olv','Cpx','Grt','Qtz'});
-pars             = Load_Data({'Cpx','Grt','Qtz'});
+pars             = Load_Data({'Olv','Cpx','Grt','Qtz','Crd','Spl'});
+% pars             = Load_Data({'Qtz','Crd'});
 
 Np               = length(pars);
 
@@ -48,7 +48,7 @@ F                = MODEL;
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 300;
+nx               = 60*6;
 ny               = 4;
 
 x                = linspace(0,Lx,nx);
@@ -78,23 +78,41 @@ GRID.Ly          = Ly/L_sc;
 % -------------------------------------------------------------------------
 c                = cell(1,Np);
 
-% % Olv
-% c{1}{1}          = 0.0063*ones(ny,nx);
-% c{1}{2}          = 0.2597*ones(ny,nx);
-% c{1}{3}          = 0.5133*ones(ny,nx);
+
+% Olv
+c{1}{1}          = 0.0063*ones(ny,nx);
+c{1}{2}          = 0.2597*ones(ny,nx);
+c{1}{3}          = 0.5133*ones(ny,nx);
 
 % Cpx
-c{1}{1}          = 0.0200*ones(ny,nx);
-c{1}{2}          = 0.1200*ones(ny,nx);
-c{1}{3}          = 0.0300*ones(ny,nx);
-c{1}{4}          = 0.6000*ones(ny,nx);
+c{2}{1}          = 0.0200*ones(ny,nx);
+c{2}{2}          = 0.1200*ones(ny,nx);
+c{2}{3}          = 0.0300*ones(ny,nx);
+c{2}{4}          = 0.6000*ones(ny,nx);
 
 % Grt
-c{2}{1}          = 0.4818*ones(ny,nx);
-c{2}{2}          = 0.3943*ones(ny,nx);
+c{3}{1}          = 0.4818*ones(ny,nx);
+c{3}{2}          = 0.3943*ones(ny,nx);
 
 % Qtz
-c{3}{1}          = 1.0000*ones(ny,nx);
+c{4}{1}          = 1.0000*ones(ny,nx);
+
+% Crd
+c{5}{1}          = 1.0000*ones(ny,nx);
+
+% Spl
+c{6}{1}          = 0.5000*ones(ny,nx);
+c{6}{2}          = 0.1000*ones(ny,nx);
+c{6}{3}          = 0.1000*ones(ny,nx);
+
+
+
+% % Qtz
+% c{1}{1}          = 1.0000*ones(ny,nx);
+% 
+% % Crd
+% c{2}{1}          = 1.0000*ones(ny,nx);
+
 
 
 %% ------------------------------------------------------------------------
@@ -102,17 +120,32 @@ c{3}{1}          = 1.0000*ones(ny,nx);
 % -------------------------------------------------------------------------
 phi              = zeros(ny,nx,Np);
 
-md               = nx/3;
-
+md               = nx/6;
 phi(:,1:md,1)              = 1;
 phi(:,1*md+1:2*md,2)       = 1;
 phi(:,2*md+1:3*md,3)       = 1;
+phi(:,3*md+1:4*md,4)       = 1;
+phi(:,4*md+1:5*md,5)       = 1;
+phi(:,5*md+1:6*md,6)       = 1;
+
+% md               = nx/2;
+% phi(:,1:md,1)              = 1;
+% phi(:,1*md+1:2*md,2)       = 1;
+ 
+
+% md               = nx/2;
+% phi(:,1:md,1)              = 1;
+% phi(:,1*md+1:2*md,2)       = 1;
+% phi(:,2*md+1:3*md,3)       = 1;
 % phi(:,3*md+1:4*md,4)       = 1;
 
-% In case nx is not exactly divisible by 4, assign remaining cells to phase 4
-if 4*md < nx
-    phi(:,4*md+1:end,4) = 1;
-end
+
+% md               = nx/2;
+% phi(   1:md,    1:md  ,1)  =  1;
+% phi(md+1:nx,    1:md  ,2)  =  1;
+% phi(1:md-10, md+1:nx  ,3)  =  1;
+% phi(md-9:nx, md+1:nx  ,4)  =  1;
+
 
 %% ------------------------------------------------------------------------
 %  Initial p, e, E
@@ -142,7 +175,7 @@ PARAM.eta        = eta;
 %  Pair-pair initialization in pure phase regions
 % -------------------------------------------------------------------------
 tol_pure         = 1e-12;
-p_pair           = 0.1;
+p_pair           = 0.05;
 
 for ip = 1:Np
 
@@ -287,7 +320,7 @@ save('Map2d.mat', ...
     'x','dx','nx','y','dy','ny','L_sc','F','Np','Ne')
 
 
-plot(GRID.x,STATE.c{1}{1}(3,:),GRID.x,STATE.c{1}{2}(3,:),GRID.x,STATE.c{1}{3}(3,:),GRID.x,STATE.c{1}{4}(3,:));title('c21')
+% plot(GRID.x,STATE.c{1}{1}(3,:),GRID.x,STATE.c{1}{2}(3,:),GRID.x,STATE.c{1}{3}(3,:),GRID.x,STATE.c{1}{4}(3,:));title('c21')
 
 
 %% ========================================================================

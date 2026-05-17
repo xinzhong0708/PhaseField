@@ -14,13 +14,13 @@ Ne           =  length(E);
 N            =  numel(E{1});
 alpha        =  level(1);
 Miter        =  level(2);
-c_tol        =  1e-5;
+c_tol        =  1e-6;
 
 %Line-search & damping parameters
-MaxLS        =  8;
-amin         =  1e-6;
+MaxLS        =  10;
+amin         =  1e-7;
 energy_tol   =  1e-9;
-lam_c        =  1e-4;
+lam_c        =  1e-5;
 
 %Check whether any phase has internal composition degrees of freedom
 has_dof      =  false(1,Np);
