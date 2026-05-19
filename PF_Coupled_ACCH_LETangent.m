@@ -65,7 +65,7 @@ STATE_SRC.chi   = STATE_COEF.chi;
 STATE_SRC.e     = STATE_COEF.e;
 STATE_SRC.omg   = STATE_COEF.omg;
 
-PARAM.A_ac = Calc_Aac_FrozenOmega(STATE_SRC,PARAM,MODEL,3,1e-6,0,[]);
+PARAM.A_ac = 0*Calc_Aac_FrozenOmega(STATE_SRC,PARAM,MODEL,3,1e-6,0,[]);
 STATE_SRC  = Calc_S_AllenCahn(STATE_SRC,PARAM,MODEL);
 S_AC       = STATE_SRC.S_AC;
 
@@ -110,13 +110,54 @@ idx_DR = sub2ind([ny,nx], iiDR, jjDR);
 idx_UL = sub2ind([ny,nx], iiUL, jjUL);
 idx_DL = sub2ind([ny,nx], iiDL, jjDL);
 
+% % ------------------------------------------------------------
+% % Active phi mask
+% % ------------------------------------------------------------
+% if isfield(NUM,'phi_mask_cut')
+%     phi_cut = NUM.phi_mask_cut;
+% else
+%     phi_cut = 1e-8;
+% end
+% 
+% if isfield(NUM,'phi_mask_thick')
+%     mask_thick = NUM.phi_mask_thick;
+% else
+%     if isfield(PHYS,'kappa') && PHYS.kappa ~= 0
+%         mask_thick = 2;
+%     else
+%         mask_thick = 1;
+%     end
+% end
+% 
+% % Remove tiny numerical tails before masking.
+% % This prevents all phases/grains becoming active everywhere.
+% phi_for_mask = phi_ref;
+% phi_for_mask(phi_for_mask < phi_cut) = 0;
+% 
+% if exist('Calc_Mask','file') == 2
+%     maskPhi = Calc_Mask(phi_for_mask,mask_thick) > 0;
+% else
+%     maskPhi = Local_Calc_Mask(phi_for_mask,phi_cut,mask_thick);
+% end
+% 
+% maskPhi = logical(maskPhi);
+% active_per_cell = sum(maskPhi,3);
+
+
+
 % ------------------------------------------------------------
-% Active phi mask
+% Active phi mask: solve only around interfaces
 % ------------------------------------------------------------
 if isfield(NUM,'phi_mask_cut')
     phi_cut = NUM.phi_mask_cut;
 else
     phi_cut = 1e-8;
+end
+
+if isfield(NUM,'phi_mask_pure_cut')
+    pure_cut = NUM.phi_mask_pure_cut;
+else
+    pure_cut = phi_cut;
 end
 
 if isfield(NUM,'phi_mask_thick')
@@ -129,19 +170,32 @@ else
     end
 end
 
-% Remove tiny numerical tails before masking.
-% This prevents all phases/grains becoming active everywhere.
-phi_for_mask = phi_ref;
-phi_for_mask(phi_for_mask < phi_cut) = 0;
+% Interface-only mask:
+%   do not solve where phi is fully absent
+%   do not solve where phi is fully pure
+%   solve only near 0 < p_phi < 1 and its stencil neighborhood
+maskPhi = Local_Calc_Interface_Mask(phi_ref,phi_cut,pure_cut,mask_thick);
 
-if exist('Calc_Mask','file') == 2
-    maskPhi = Calc_Mask(phi_for_mask,mask_thick) > 0;
-else
-    maskPhi = Local_Calc_Mask(phi_for_mask,phi_cut,mask_thick);
+% Optional safety: include cells where AC source is unexpectedly nonzero.
+% Usually keep this off unless debugging.
+if isfield(NUM,'phi_mask_source_tol') && ~isempty(NUM.phi_mask_source_tol)
+
+    source_tol = NUM.phi_mask_source_tol;
+
+    for alpha = 1:Nop
+
+        core_source = abs(S_AC{alpha}) > source_tol;
+        mask_source = Local_Dilate_Mask(core_source,mask_thick);
+
+        maskPhi(:,:,alpha) = maskPhi(:,:,alpha) | mask_source;
+
+    end
+
 end
 
 maskPhi = logical(maskPhi);
 active_per_cell = sum(maskPhi,3);
+
 
 % ------------------------------------------------------------
 % Unknown ids
@@ -479,39 +533,58 @@ A = sparse(rows,cols,vals,Ntot,Ntot);
 % ------------------------------------------------------------
 % Solve
 % ------------------------------------------------------------
-use_iter = false;
+direct_mode = 'colamd';
 
-if isfield(NUM,'use_coupled_iter')
-    use_iter = NUM.use_coupled_iter;
+if isfield(NUM,'direct_mode')
+    direct_mode = NUM.direct_mode;
 end
 
-if use_iter
-    tol   = 1e-12;
-    maxit = 1000;
+switch lower(direct_mode)
 
-    setup.type    = 'ilutp';
-    setup.droptol = 1e-4;
+    case 'none'
 
-    try
-        [Lilu,Uilu] = ilu(A,setup);
-        [sol,flag,relres,iter] = bicgstab(A,R,tol,maxit,Lilu,Uilu);
-    catch
-        [sol,flag,relres,iter] = bicgstab(A,R,tol,maxit);
-    end
+        sol = A \ R;
 
-    if flag ~= 0 || any(~isfinite(sol))
-        warning('Coupled bicgstab failed. Falling back to direct solve.');
-        sol    = A \ R;
-        flag   = 0;
-        relres = norm(A*sol - R)/max(norm(R),eps);
-        iter   = 0;
-    end
-else
-    sol    = A \ R;
-    flag   = 0;
-    relres = norm(A*sol - R)/max(norm(R),eps);
-    iter   = 0;
+    case 'colamd'
+
+        q = colamd(A);
+        y = A(:,q) \ R;
+
+        sol = zeros(size(R));
+        sol(q) = y;
+
+    case 'symamd'
+
+        S = spones(A) + spones(A');
+        p = symamd(S);
+
+        y = A(p,p) \ R(p);
+
+        sol = zeros(size(R));
+        sol(p) = y;
+
+    case 'symrcm'
+
+        S = spones(A) + spones(A');
+        p = symrcm(S);
+
+        y = A(p,p) \ R(p);
+
+        sol = zeros(size(R));
+        sol(p) = y;
+
+    otherwise
+
+        error('Unknown NUM.direct_mode: %s',direct_mode)
+
 end
+
+flag   = 0;
+relres = norm(A*sol - R)/max(norm(R),eps);
+iter   = [0 0];
+
+
+
 
 % ------------------------------------------------------------
 % Unpack dphi and dmu
@@ -543,12 +616,15 @@ end
 % ------------------------------------------------------------
 % Update phi and p from fixed reference state
 % ------------------------------------------------------------
-STATE_NEW      = STATE_REF;
-STATE_NEW.phi  = phi_ref + dphi;
+STATE_NEW          = STATE_REF;
+STATE_NEW.phi      = phi_ref + dphi;
 if NUM.norm_phi == 1
-STATE_NEW.phi  = Normalize_Phi_Local(STATE_NEW.phi);
+    STATE_NEW.phi  = Normalize_Phi_L2_Local(STATE_NEW.phi);
 end
-STATE_NEW.p    = Calc_p(MODEL,STATE_NEW.phi);
+if NUM.cut_phi == 1
+    STATE_NEW.phi  = Cut_Phi_Local(STATE_NEW.phi);
+end
+STATE_NEW.p        = Calc_p(MODEL,STATE_NEW.phi);
 
 % ------------------------------------------------------------
 % Update mu from fixed reference state
@@ -695,16 +771,6 @@ k = k + n;
 end
 
 
-function phi = Normalize_Phi_Local(phi)
-phi = max(phi,0);
-s = sum(phi,3);
-s = max(s,eps);
-for ip = 1:size(phi,3)
-    phi(:,:,ip) = phi(:,:,ip) ./ s;
-end
-end
-
-
 function E = EnforceMeanE_Local(E,E_old)
 
 Ne = numel(E);
@@ -770,5 +836,101 @@ cols(k:k+n-1) = c(:);
 vals(k:k+n-1) = v(:);
 
 k = k + n;
+
+end
+
+function [phi] = Cut_Phi_Local(phi)
+phi(phi<0) = 0;
+phi(phi>1) = 1;
+end
+
+
+function phi = Normalize_Phi_L2_Local(phi)
+%NORMALIZE_PHI_L2_LOCAL
+% Natural normalization for p_i = phi_i^2 / sum_j(phi_j^2).
+% If all phi are zero at a grid, keep them zero.
+% Remove numerical overshoot
+phi  = max(phi,0);
+phi  = min(phi,1);
+% L2 amplitude
+s    = sqrt(sum(phi.^2,3));
+% Only normalize where amplitude is nonzero
+mask = s > eps;
+for ip = 1:size(phi,3)
+    tmp         = phi(:,:,ip);
+    tmp(mask)   = tmp(mask) ./ s(mask);
+    phi(:,:,ip) = tmp;
+end
+end
+
+function mask = Local_Calc_Interface_Mask(phi,low_cut,pure_cut,thickness)
+%LOCAL_CALC_INTERFACE_MASK
+%
+% Build mask for solving dphi only around interfaces.
+%
+% A cell is active for phi_alpha if the local normalized phase weight
+%
+%       q_alpha = phi_alpha^2 / sum_beta phi_beta^2
+%
+% is neither absent nor pure:
+%
+%       low_cut < q_alpha < 1 - pure_cut
+%
+% Sharp 0/1 interfaces are also detected by neighbor jumps in q_alpha.
+% The resulting core is then dilated by 'thickness' cells.
+
+[ny,nx,Nop] = size(phi);
+
+mask = false(ny,nx,Nop);
+
+den = sum(phi.^2,3) + eps;
+
+for alpha = 1:Nop
+
+    q = phi(:,:,alpha).^2 ./ den;
+
+    % Diffuse-interface cells
+    core = q > low_cut & q < 1 - pure_cut;
+
+    % Also detect sharp 0/1 jumps, important for initial maps
+    if nx == 1
+        qL = q;
+        qR = q;
+    else
+        qL = q(:,[2,1:nx-1]);
+        qR = q(:,[2:nx,nx-1]);
+    end
+
+    if ny == 1
+        qU = q;
+        qD = q;
+    else
+        qU = q([2,1:ny-1],:);
+        qD = q([2:ny,ny-1],:);
+    end
+
+    jump = abs(q - qL) > low_cut | ...
+           abs(q - qR) > low_cut | ...
+           abs(q - qU) > low_cut | ...
+           abs(q - qD) > low_cut;
+
+    core = core | jump;
+
+    % Dilation gives stencil support
+    mask(:,:,alpha) = Local_Dilate_Mask(core,thickness);
+
+end
+
+end
+
+function mask = Local_Dilate_Mask(core,thickness)
+
+if thickness <= 0
+    mask = core;
+    return
+end
+
+ker  = ones(2*thickness+1,2*thickness+1);
+mask = conv2(double(core),ker,'same') > 0;
 
 end

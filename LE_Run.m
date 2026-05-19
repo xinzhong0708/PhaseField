@@ -2,28 +2,39 @@ function STATE = LE_Run(STATE,PARAM,MODEL)
 %LE_RUN Local-equilibrium update using structured variables.
 
 %Unpack structured variables
-pars     = MODEL.pars;
-p        = STATE.p;
-c        = STATE.c;
-E        = STATE.E;
-mu_e     = STATE.mu_e;
-chi      = STATE.chi;
-eta_vec  = PARAM.eta(:);
-LE_state = STATE.LE_state;
+pars        = MODEL.pars;
+phase_index = MODEL.phase_index(:).';
+
+p           = STATE.p;
+c           = STATE.c;
+E           = STATE.E;
+mu_e        = STATE.mu_e;
+chi         = STATE.chi;
+eta_vec     = PARAM.eta(:);
+LE_state    = STATE.LE_state;
 
 if isempty(LE_state)
     LE_state = struct();
 end
 
 %Reshape 2D into 1D
-nx      = size(p,2);
-ny      = size(p,1);
-c       = Unpack_c(c);
-E       = Unpack_E(E);
-p       = Unpack_p(p);
-mu_e    = Unpack_E(mu_e);
-chi     = Unpack_Chi(chi);
+nx          = size(p,2);
+ny          = size(p,1);
+c           = Unpack_c(c);
+E           = Unpack_E(E);
+p           = Unpack_p(p);
+mu_e        = Unpack_E(mu_e);
+chi         = Unpack_Chi(chi);
 
+%Keep grain-resolved copies
+pars_full   = pars;
+c_full      = c;
+p_full      = p;
+
+%Collapse repeated grains to thermodynamic phases
+[pars,c,p,grain_to_phase] = Collapse_LE_Phases(pars_full,c_full,p_full,phase_index);
+
+%Maximal number of allowed phase coexist
 Pmax    = 4;
 
 %Thermodynamic interpolation thresholds
@@ -211,33 +222,54 @@ for k = 1:min([Np,Pmax])
 
 end
 
-%Pack up
-g      = cell(1,Np);
+%Pack up collapsed thermodynamic phases
+g = cell(1,Np);
 
-%Use original g with excess energy to keep consistent with GEM
 for ip = 1:Np
-    g{ip} = reshape(PhaseG(pars{ip}, c{ip}), ny, []);
+    g{ip} = reshape(PhaseG(pars{ip},c{ip}),ny,[]);
 end
 
-c     = Pack_c(c, ny);
-mu_e  = Pack_E(mu_e, ny);
-chi   = Pack_chi(chi, ny);
-e     = Calc_e(pars, c);
+c_col = Pack_c(c,ny);
+mu_e  = Pack_E(mu_e,ny);
+chi   = Pack_chi(chi,ny);
+e_col = Calc_e(pars,c_col);
 
-%Calculate omega
-Ne    = length(E);
-omg   = ones(ny, nx, Np);
+%Calculate omega for collapsed phases
+Ne      = length(E);
+omg_col = zeros(ny,nx,Np);
 
 for ip = 1:Np
-    omg(:,:,ip) = g{ip};
+
+    omg_col(:,:,ip) = g{ip};
+
     for ie = 1:Ne
-        omg(:,:,ip) = omg(:,:,ip) - e{ip}{ie} .* mu_e{ie};
+        omg_col(:,:,ip) = omg_col(:,:,ip) - e_col{ip}{ie} .* mu_e{ie};
     end
 
 end
 
+%Copy collapsed result back to grain-resolved variables
+Ngrain = numel(c_full);
+c_out  = cell(1,Ngrain);
+omg    = zeros(ny,nx,Ngrain);
+
+for ig = 1:Ngrain
+
+    iph = grain_to_phase(ig);
+
+    c_out{ig}    = c_col{iph};
+    omg(:,:,ig)  = omg_col(:,:,iph);
+
+end
+
+e = Calc_e(pars_full,c_out);
+
+%Store collapsed active set information
+LE_state.phase_index    = phase_index;
+LE_state.grain_to_phase = grain_to_phase;
+
 %Write back to STATE
-STATE.c        = c;
+STATE.c        = c_out;
 STATE.e        = e;
 STATE.mu_e     = mu_e;
 STATE.chi      = chi;
@@ -301,6 +333,78 @@ if any(bad(:))
         tmp = p_th(:,:,ip);
         tmp(bad & idmax == ip) = 1;
         p_th(:,:,ip) = tmp;
+
+    end
+
+end
+
+end
+
+
+function [pars_c,c_c,p_c,grain_to_phase] = Collapse_LE_Phases(pars,c,p,phase_index)
+
+phase_index = phase_index(:).';
+phase_id    = unique(phase_index,'stable');
+
+Ngrain      = numel(c);
+Nphase      = numel(phase_id);
+N           = size(p,2);
+
+grain_to_phase = zeros(1,Ngrain);
+
+for iph = 1:Nphase
+    grain_to_phase(phase_index == phase_id(iph)) = iph;
+end
+
+%Representative thermodynamic data
+pars_c = cell(1,Nphase);
+
+for iph = 1:Nphase
+    ig = find(grain_to_phase == iph,1,'first');
+    pars_c{iph} = pars{ig};
+end
+
+%Collapse p by summing grains of the same phase
+p_c = zeros(1,N,Nphase);
+
+for ig = 1:Ngrain
+    iph = grain_to_phase(ig);
+    p_c(:,:,iph) = p_c(:,:,iph) + p(:,:,ig);
+end
+
+%Collapse c by p-weighted average
+c_c = cell(1,Nphase);
+
+for iph = 1:Nphase
+
+    grains = find(grain_to_phase == iph);
+    ig0    = grains(1);
+    Nc     = numel(c{ig0});
+
+    c_c{iph} = cell(1,Nc);
+
+    den = zeros(size(c{ig0}{1}));
+
+    for ig = grains
+        den = den + reshape(p(:,:,ig),size(den));
+    end
+
+    for ic = 1:Nc
+
+        num = zeros(size(c{ig0}{ic}));
+
+        for ig = grains
+            w   = reshape(p(:,:,ig),size(num));
+            num = num + w .* c{ig}{ic};
+        end
+
+        tmp  = c{ig0}{ic};
+        good = den > eps;
+
+        tmp(good)  = num(good) ./ den(good);
+        tmp(~good) = c{ig0}{ic}(~good);
+
+        c_c{iph}{ic} = tmp;
 
     end
 

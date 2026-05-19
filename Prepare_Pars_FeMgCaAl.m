@@ -1,8 +1,8 @@
 clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Pressure Temperature
-T              =  700 + 273.15;    % K
-P              =  1e9;             % Pa
+T              =  720 + 273.15;    % K
+P              =  0.8*1e9;         % Pa
 E_sc           =  1e9;             % J
 vref           =  2e-5;            % m3/mol
 
@@ -11,9 +11,9 @@ solmod         = 'solution_models_PFM';
 Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 
 %Phases
-phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel'};
-phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Crd'     ,'Spl'   };
-scale          =  1;
+phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite'};
+phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Crd'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        };
+scale          =  0.5;
 for ip = 1:length(phase_all)
 
     %Phase

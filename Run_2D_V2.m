@@ -1,5 +1,5 @@
 %Clear and restart
-clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
+clear;figure(1);addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Load map
 load Map2d.mat
@@ -8,8 +8,8 @@ load Map2d.mat
 PHYS.E_sc          =  E_sc;
 PHYS.t_sc          =  1;                                                   % Time scale
 PHYS.L_sc          =  1;                                                   % Length scale
-PHYS.l             =  Lx/250/L_sc;                                         % interface thickness (m)
-PHYS.sigma         =  0.6/PHYS.E_sc*PHYS.L_sc^2;                           % surface energy (J/m^2)
+PHYS.l             =  Lx/90/L_sc;                                          % interface thickness (m)
+PHYS.sigma         =  0.5/PHYS.E_sc*PHYS.L_sc^2;                           % surface energy (J/m^2)
 PHYS.kappa         =  2e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
 PHYS.D_esti        =  1e-12;
 PHYS.chi_ref       =  1e-2;
@@ -17,16 +17,16 @@ PHYS.M0            =  PHYS.D_esti*PHYS.t_sc/PHYS.L_sc^2*PHYS.chi_ref;
 PHYS.m             =  6*PHYS.sigma/PHYS.l;
 PHYS.kap           =  3/4*PHYS.sigma*PHYS.l;
 PHYS.dceq          =  0.5;
-PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/1000;
+PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/50;
 PHYS.eta           =  eta;
 
 %NUMERICS
-NUM.dt_phy         =   1e-4/PHYS.t_sc;
-NUM.dt_max         =    1e5/PHYS.t_sc;
+NUM.dt_phy         =   1e-3/PHYS.t_sc;
+NUM.dt_max         =    1e3/PHYS.t_sc;
 NUM.dt_min         =  1e-16/PHYS.t_sc; 
 NUM.t_tot          =    1e5/PHYS.t_sc;
-NUM.dE_target      =  4e-2;
-NUM.dp_target      =  4e-2;
+NUM.dE_target      =  5e-2;
+NUM.dp_target      =  5e-2;
 NUM.dmu_target     =  1e5;
 NUM.time           =  0;
 NUM.dt_good_count  =  0;
@@ -34,10 +34,12 @@ NUM.dt_grow_after  =  8;
 NUM.dt_grow_fac    =  1.15;
 NUM.dt_shrink_fac  =  0.5;
 NUM.err_grow       =  0.25;
-NUM.phi_mask_cut   =  1e-9;
-NUM.phi_mask_thick =  10;
-NUM.norm_phi       =  0;
+NUM.phi_mask_cut   =  1e-6;
+NUM.phi_mask_thick =  2;
+NUM.norm_phi       =  1;
+NUM.cut_phi        =  0;
 NUM.norm_E         =  1;
+NUM.int_damp       =  0.5;
 
 %GRIDS
 GRID.dx            =  dx;
@@ -74,12 +76,11 @@ STATE.LE_state     = [   ];
 %DISPLAY COMPOSITION
 disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{end},'all')])
 
-load temp
-NUM.dE_target      =  5e-2;
-NUM.dp_target      =  5e-2;
-NUM.dt_max         =    1e5/PHYS.t_sc;
+% load temp
+% NUM.dE_target      =  4e-2;
+% NUM.dp_target      =  4e-2;
 
-for it = it:1e5
+for it = 1:1e5
     if mod(it,100)==0
         save(num2str(it))
     end
@@ -92,7 +93,7 @@ for it = it:1e5
     
     % METHOD1
     % Make sure old state is thermodynamically consistent
-    PARAM.eta            =    Eta_Damping(STATE_OLD.p,PHYS.eta,1*PHYS.eta);
+    PARAM.eta            =    Eta_Damping(STATE_OLD.p,PHYS.eta,NUM.int_damp*PHYS.eta);
     STATE_OLD            =    LE_Run(STATE_OLD,PARAM,MODEL);
 
     % One monolithic tangent AC-CH-LE step
@@ -110,41 +111,41 @@ for it = it:1e5
     %Plotting
     TIME(it)             =    NUM.time;
     DTPHY(it)            =    NUM.dt_phy;
-    PHASE1(it)           =    mean(mean(STATE.p(:,:,1)));
-    PHASE2(it)           =    mean(mean(STATE.p(:,:,2)));
-
-    if mod(it,5)==0
-        disp(NUM.dt_phy)
-        disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,3))),mean(mean(STATE.p(:,:,4))),mean(mean(STATE.p(:,:,5)))])
-        subplot(331);plot(GRID.x,STATE.E{1}(3,:),GRID.x,STATE.E{2}(3,:),GRID.x,STATE.E{3}(3,:),GRID.x,STATE.E{4}(3,:));title('E1')
-        subplot(332);plot(STATE.mu_e{1}(3,:));title('mu_e')
-        subplot(333);plot(DTPHY,'b.');title('dt')
-        subplot(334);plot(GRID.x,STATE.phi(3,:,1),'.-',GRID.x,STATE.phi(3,:,2),'.-',GRID.x,STATE.phi(3,:,3),'.-',GRID.x,STATE.phi(3,:,end-1),'.-',GRID.x,STATE.phi(3,:,end),'.-');title('p2')        
-        % subplot(334);plot(GRID.x,STATE.phi(3,:,1),'.-',GRID.x,STATE.phi(3,:,2),'.-');title('p2')        
-        subplot(335);plot(GRID.x,STATE.omg(3,:,1)-STATE.omg(3,:,2),GRID.x,STATE.omg(3,:,2)-STATE.omg(3,:,3),'.-');title('domg12')
-        subplot(336);plot(PARAM.eta(3,:));title('eta')
-        subplot(337);plot(GRID.x,STATE.c{2}{1}(3,:),GRID.x,STATE.c{2}{2}(3,:),GRID.x,STATE.c{2}{3}(3,:),GRID.x,STATE.c{2}{4}(3,:));title('c11')
-        subplot(338);plot(GRID.x,STATE.c{3}{1}(3,:),GRID.x,STATE.c{3}{2}(3,:));title('c21')
-        subplot(339);plot(TIME,PHASE2,'.-');title('Phase2')
-        drawnow
-    end
-
-
-    % if mod(it,2)==0
+    PHASE(it,:)          =    squeeze(mean(STATE.p,[1 2]));
+    
+    % if mod(it,5)==0
     %     disp(NUM.dt_phy)
-    %     disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(STATE.E{3}(:)),mean(STATE.E{4}(:))])
-    %     [~,phase_ID] = max(STATE.p,[],3);
-    %     subplot(331);pcolor(STATE.E{1});colorbar;shading interp;title('E1')
-    %     subplot(332);pcolor(STATE.mu_e{1});colorbar;shading interp;title('mu_e')
+    %     disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,3))),mean(mean(STATE.p(:,:,4))),mean(mean(STATE.p(:,:,5))),mean(mean(STATE.p(:,:,6))),mean(mean(STATE.p(:,:,7)))])
+    %     subplot(331);plot(GRID.x,STATE.E{1}(3,:),GRID.x,STATE.E{2}(3,:),GRID.x,STATE.E{3}(3,:),GRID.x,STATE.E{4}(3,:));title('E1')
+    %     subplot(332);plot(STATE.mu_e{1}(3,:));title('mu_e')
     %     subplot(333);plot(DTPHY,'b.');title('dt')
-    %     subplot(334);pcolor(phase_ID);colorbar;shading interp;title('p2')
-    %     subplot(335);pcolor(STATE.omg(:,:,1)-STATE.omg(:,:,2));colorbar;shading interp;title('domg12')
-    %     subplot(336);pcolor(STATE.p(:,:,2));colorbar;shading interp;title('p2')
-    %     subplot(337);plot(GRID.y,STATE.phi(60,:,2),'.-',GRID.y,STATE.phi(70,:,2),'.-',GRID.y,STATE.phi(80,:,2),'.-',GRID.y,STATE.phi(90,:,2),'.-',GRID.y,STATE.phi(100,:,2),'.-')
-    %     subplot(338);pcolor(STATE.c{2}{1});colorbar;shading interp;title('c21')
-    %     subplot(339);plot(TIME,PHASE2,'.-');title('Phase2')
+    %     subplot(334);plot(GRID.x,STATE.phi(3,:,1),'.-',GRID.x,STATE.phi(3,:,2),'.-',GRID.x,STATE.phi(3,:,3),'.-',GRID.x,STATE.phi(3,:,4),'.-',GRID.x,STATE.phi(3,:,5),'.-',GRID.x,STATE.phi(3,:,end-1),'.-',GRID.x,STATE.phi(3,:,end),'.-');title('p2')        
+    %     % subplot(334);plot(GRID.x,STATE.phi(3,:,1),'.-',GRID.x,STATE.phi(3,:,2),'.-');title('p2')        
+    %     subplot(335);plot(GRID.x,STATE.omg(3,:,1)-STATE.omg(3,:,2),GRID.x,STATE.omg(3,:,2)-STATE.omg(3,:,3),'.-');title('domg12')
+    %     subplot(336);plot(PARAM.eta(3,:));title('eta')
+    %     subplot(337);plot(GRID.x,STATE.c{2}{1}(3,:),GRID.x,STATE.c{2}{2}(3,:),GRID.x,STATE.c{2}{3}(3,:),GRID.x,STATE.c{2}{4}(3,:));title('c11')
+    %     subplot(338);plot(GRID.x,STATE.c{3}{1}(3,:),GRID.x,STATE.c{3}{2}(3,:));title('c21')
+    %     subplot(339);plot(TIME,PHASE,'.-');title('Phase2')
+    %     % subplot(339);plot(TIME,PHASE,'k--');title('Phase2');hold on
     %     drawnow
     % end
+
+
+    if mod(it,2)==0
+        disp(NUM.dt_phy)
+        disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,3))),mean(mean(STATE.p(:,:,4))),mean(mean(STATE.p(:,:,5))),mean(mean(STATE.p(:,:,6))),mean(mean(STATE.p(:,:,7)))])
+        [~,phase_ID] = max(STATE.p,[],3);
+        subplot(331);pcolor(STATE.E{1});colorbar;shading interp;title('E1')
+        subplot(332);pcolor(STATE.mu_e{1});colorbar;shading interp;title('mu_e')
+        subplot(333);plot(DTPHY,'b.');title('dt')
+        subplot(334);pcolor(phase_ID);colorbar;shading interp;title('p2')
+        subplot(335);pcolor(STATE.omg(:,:,1)-STATE.omg(:,:,2));colorbar;shading interp;title('domg12')
+        subplot(336);pcolor(STATE.p(:,:,2));colorbar;shading interp;title('p2')
+        subplot(337);plot(GRID.y,STATE.phi(10,:,2),'.-',GRID.y,STATE.phi(20,:,2),'.-',GRID.y,STATE.phi(30,:,2),'.-',GRID.y,STATE.phi(40,:,2),'.-',GRID.y,STATE.phi(50,:,2),'.-')
+        subplot(338);pcolor(STATE.c{2}{1});colorbar;shading interp;title('c21')
+        subplot(339);plot(TIME,PHASE,'.-');title('Phase2')
+        drawnow
+    end
 
 
 end
