@@ -19,7 +19,8 @@ eta0             = 1200e10/E_sc;
 %% ------------------------------------------------------------------------
 %  Thermodynamic data
 % -------------------------------------------------------------------------
-pars             = Load_Data({'Olv','Cpx','Grt','Qtz','Crd','Kya','Opx'});
+phs_name         = {'Olv','Cpx','Grt','Qtz','Crd','Kya','Opx'};
+pars             = Load_Data(phs_name);
 % pars             = Load_Data({'Qtz','Crd'});
 
 Np               = length(pars);
@@ -29,6 +30,7 @@ Np               = length(pars);
 % -------------------------------------------------------------------------
 MODEL            = struct();
 MODEL.pars       = pars;
+MODEL.phs_name   = phs_name;
 
 eps_phi          = 1e-14;
 

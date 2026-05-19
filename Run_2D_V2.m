@@ -111,8 +111,13 @@ for it = 1:1e5
     %Plotting
     TIME(it)             =    NUM.time;
     DTPHY(it)            =    NUM.dt_phy;
-    PHASE(it,:)          =    squeeze(mean(STATE.p,[1 2]));
-    
+    phase_ids            =    unique(MODEL.phase_index,'stable');
+    PHASE(it,:)          =    zeros(1,numel(phase_ids));
+    for iph = 1:numel(phase_ids)
+        grains = find(MODEL.phase_index == phase_ids(iph));
+        PHASE(it,iph) = mean(sum(STATE.p(:,:,grains),3),'all');
+    end
+
     % if mod(it,5)==0
     %     disp(NUM.dt_phy)
     %     disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,3))),mean(mean(STATE.p(:,:,4))),mean(mean(STATE.p(:,:,5))),mean(mean(STATE.p(:,:,6))),mean(mean(STATE.p(:,:,7)))])
@@ -133,17 +138,16 @@ for it = 1:1e5
 
     if mod(it,2)==0
         disp(NUM.dt_phy)
-        disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,3))),mean(mean(STATE.p(:,:,4))),mean(mean(STATE.p(:,:,5))),mean(mean(STATE.p(:,:,6))),mean(mean(STATE.p(:,:,7)))])
-        [~,phase_ID] = max(STATE.p,[],3);
-        subplot(331);pcolor(STATE.E{1});colorbar;shading interp;title('E1')
-        subplot(332);pcolor(STATE.mu_e{1});colorbar;shading interp;title('mu_e')
-        subplot(333);plot(DTPHY,'b.');title('dt')
-        subplot(334);pcolor(phase_ID);colorbar;shading interp;title('p2')
-        subplot(335);pcolor(STATE.omg(:,:,1)-STATE.omg(:,:,2));colorbar;shading interp;title('domg12')
-        subplot(336);pcolor(STATE.p(:,:,2));colorbar;shading interp;title('p2')
-        subplot(337);plot(GRID.y,STATE.phi(10,:,2),'.-',GRID.y,STATE.phi(20,:,2),'.-',GRID.y,STATE.phi(30,:,2),'.-',GRID.y,STATE.phi(40,:,2),'.-',GRID.y,STATE.phi(50,:,2),'.-')
-        subplot(338);pcolor(STATE.c{2}{1});colorbar;shading interp;title('c21')
-        subplot(339);plot(TIME,PHASE,'.-');title('Phase2')
+        disp(PHASE(it,:))
+        PF_Plot([3,3,1],'E1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,6],'p2',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,7],'phi2',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,8],'c21',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,9],'Phase%',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         drawnow
     end
 
