@@ -1,19 +1,19 @@
 clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
 
 %Pressure Temperature
-T              =  720 + 273.15;    % K
-P              =  0.8*1e9;         % Pa
+T              =  1000 + 273.15;    % K
+P              =  2.5*1e9;         % Pa
 E_sc           =  1e9;             % J
 vref           =  2e-5;            % m3/mol
 
 %Elements
 solmod         = 'solution_models_PFM';
-Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
+Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
 
 %Phases
-phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite'};
-phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Crd'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        };
-scale          =  0.5;
+phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar'};
+phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Cor'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        ,'Fel'     };
+scale          =  0;
 for ip = 1:length(phase_all)
 
     %Phase
@@ -94,20 +94,20 @@ for ip = 1:length(phase_all)
     pars.phase_name    =  phs_name;
     pars.gN            =  gN;
     pars.nN            =  nN;
-    pars.penalty       =  penalty;
+    % pars.penalty       =  penalty;
 
     %Pseudocompound
-    pp                 =  props_generate(td);
-    c_psc              =  pp{1};
-    e_psc              = (c_psc*n)./sum(c_psc*n,2);
-    pars.c_psc         =  c_psc;
-    pars.e_psc         =  e_psc;
-    if isempty(num2cell(pp{1}(:,1:end-1)',2))
-        R              =  PhaseThermo(pars,{1});
-    else
-        R              =  PhaseThermo(pars,num2cell(pp{1}(:,1:end-1)',2)');
-    end
-    pars.g_psc         =  R.g;
+    % pp                 =  props_generate(td);
+    % c_psc              =  pp{1};
+    % e_psc              = (c_psc*n)./sum(c_psc*n,2);
+    % pars.c_psc         =  c_psc;
+    % pars.e_psc         =  e_psc;
+    % if isempty(num2cell(pp{1}(:,1:end-1)',2))
+    %     R              =  PhaseThermo(pars,{1});
+    % else
+    %     R              =  PhaseThermo(pars,num2cell(pp{1}(:,1:end-1)',2)');
+    % end
+    % pars.g_psc         =  R.g;
 
     %Saver
     par                =  pars;

@@ -187,7 +187,7 @@ for k = 1:min([Np,Pmax])
         %One phase
         if k == 1
             ip                     = ph_act(1);
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ip), ones(size(c_cur{1}{1})), c_cur(1), E_cur, eta, [0.8,100]);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars(ip), ones(size(c_cur{1}{1})), c_cur(1), E_cur, eta, [0.7,100]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ip, mask);
         end
 
@@ -195,8 +195,7 @@ for k = 1:min([Np,Pmax])
         if k == 2
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
-            % pars_inter             = pars;
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.6,1000]);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.4,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
@@ -204,8 +203,7 @@ for k = 1:min([Np,Pmax])
         if k == 3
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
-            % pars_inter             = pars;
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.4,1000]);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.2,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
@@ -213,8 +211,7 @@ for k = 1:min([Np,Pmax])
         if k == 4
             p_cur                  = p_th(:,mask,ph_act);
             pars_inter             = Apply_WScale_FromP(pars,p(:,mask,:),dp1,dp2,1);
-            % pars_inter             = pars;
-            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.2,1000]);
+            [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_inter(ph_act), p_cur, c_cur, E_cur, eta, [0.1,1000]);
             [c, mu_e, chi]         = Assign_LE_Back(c, mu_e, chi, c_tmp, mu_tmp, chi_tmp, ph_act, mask);
         end
 
@@ -229,23 +226,19 @@ for ip = 1:Np
     g{ip} = reshape(PhaseG(pars{ip},c{ip}),ny,[]);
 end
 
-c_col = Pack_c(c,ny);
-mu_e  = Pack_E(mu_e,ny);
-chi   = Pack_chi(chi,ny);
-e_col = Calc_e(pars,c_col);
+c_col   = Pack_c(c,ny);
+mu_e    = Pack_E(mu_e,ny);
+chi     = Pack_chi(chi,ny);
+e_col   = Calc_e(pars,c_col);
 
 %Calculate omega for collapsed phases
 Ne      = length(E);
 omg_col = zeros(ny,nx,Np);
-
 for ip = 1:Np
-
     omg_col(:,:,ip) = g{ip};
-
     for ie = 1:Ne
         omg_col(:,:,ip) = omg_col(:,:,ip) - e_col{ip}{ie} .* mu_e{ie};
     end
-
 end
 
 %Copy collapsed result back to grain-resolved variables

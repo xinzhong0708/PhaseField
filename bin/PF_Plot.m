@@ -163,13 +163,28 @@ if ~isempty(tok)
 end
 
 % ------------------------------------------------------------
-% c phase/endmember, e.g. c21 = phase 2, endmember 1
-% also supports c2_1
+% c phase/endmember, e.g.
+%   c21      = phase 2, endmember 1, masked by phase 2
+%   c2_1     = same, useful for multi-digit indices
+%   c21all   = plot everywhere without phase mask
+%   c2_1all  = plot everywhere without phase mask
 % ------------------------------------------------------------
-tok = regexp(w,'^c(\d+)_(\d+)$','tokens');
+plot_all = false;
+
+tok = regexp(w,'^c(\d+)_(\d+)all$','tokens');
 
 if isempty(tok)
-    tok = regexp(w,'^c(\d)(\d)$','tokens');
+    tok = regexp(w,'^c(\d)(\d)all$','tokens');
+end
+
+if ~isempty(tok)
+    plot_all = true;
+else
+    tok = regexp(w,'^c(\d+)_(\d+)$','tokens');
+
+    if isempty(tok)
+        tok = regexp(w,'^c(\d)(\d)$','tokens');
+    end
 end
 
 if ~isempty(tok)
@@ -178,13 +193,41 @@ if ~isempty(tok)
     ic  = str2double(tok{1}{2});
 
     grains = find(phase_index == phase_ids(iph));
-    ig     = grains(1);
 
-    pcolor(GRID.x*1e6,GRID.y*1e6,STATE.c{ig}{ic})
-    shading interp; axis equal tight; colorbar
-    title(sprintf('c%d%d %s',iph,ic,phs_name{iph}))
+    % Phase-weighted c for this thermodynamic phase.
+    % This is safer than just taking the first grain.
+    c_plot = zeros(size(STATE.p(:,:,1)));
+    wsum   = zeros(size(STATE.p(:,:,1)));
+
+    for ig = grains
+        wloc   = STATE.p(:,:,ig);
+        c_plot = c_plot + wloc .* STATE.c{ig}{ic};
+        wsum   = wsum   + wloc;
+    end
+
+    good = wsum > eps;
+    c_plot(good) = c_plot(good) ./ wsum(good);
+
+    % Mask out regions where this phase is not present
+    if ~plot_all
+        p_cut = 1e-2;
+        c_plot(wsum < p_cut) = NaN;
+    end
+
+    pcolor(GRID.x*1e6,GRID.y*1e6,c_plot)
+    shading interp
+    axis equal tight
+    colorbar
+
+    if plot_all
+        title(sprintf('c%d%d %s all',iph,ic,phs_name{iph}))
+    else
+        title(sprintf('c%d%d %s masked',iph,ic,phs_name{iph}))
+    end
+
     xlabel('x \mum')
     ylabel('y \mum')
+
     return
 
 end
@@ -234,6 +277,152 @@ if ~isempty(tok)
     title(sprintf('\\omega %s',phs_name{iph}))
     xlabel('x \mum')
     ylabel('y \mum')
+    return
+
+end
+
+
+% ------------------------------------------------------------
+% ------------------------------------------------------------
+% Phase proportion as stacked color blocks with black boundaries
+%   x axis: time
+%   y axis: cumulative phase fraction from 0 to 1
+%
+% Call:
+%   PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+%   PF_Plot([3,3,9],'PhaseBlock',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+% ------------------------------------------------------------
+if strcmp(w,'phasestack') || strcmp(w,'phaseblock')
+
+    n = find(any(PHASE ~= 0,2) | TIME(:) ~= 0,1,'last');
+
+    if isempty(n)
+        n = size(PHASE,1);
+    end
+
+    Y = PHASE(1:n,1:Nphase);
+    X = TIME(1:n);
+
+    % If TIME is still empty/zero, use iteration number
+    if all(X == 0)
+        X = (1:n).';
+        xlabel_text = 'iteration';
+    else
+        xlabel_text = 'time';
+    end
+
+    % Normalize each row to exactly sum to 1
+    s = sum(Y,2);
+    good = s > eps;
+
+    for ip = 1:Nphase
+        Y(good,ip) = Y(good,ip) ./ s(good);
+    end
+
+    % Colored stacked blocks
+    h = area(X,Y);
+    set(h,'LineStyle','none')
+
+    cmap = jet(Nphase);
+
+    for ip = 1:Nphase
+        h(ip).FaceColor = cmap(ip,:);
+    end
+
+    hold on
+
+    % Black boundaries between cumulative phase blocks
+    Ycum = cumsum(Y,2);
+
+    for ip = 1:Nphase-1
+        plot(X,Ycum(:,ip),'k-','LineWidth',1.0)
+    end
+
+    % Optional black top and bottom frame
+    plot(X,zeros(size(X)),'k-','LineWidth',0.8)
+    plot(X,ones(size(X)),'k-','LineWidth',0.8)
+
+    hold off
+
+    ylim([0 1])
+    xlim([min(X) max(X)])
+    xlabel(xlabel_text)
+    ylabel('phase fraction')
+    title('Phase proportion')
+    legend(h,phs_name,'Location','eastoutside')
+
+    return
+
+end
+
+% ------------------------------------------------------------
+% Phase proportion as stacked color blocks with black boundaries
+%   x axis: time
+%   y axis: cumulative phase fraction from 0 to 1
+%
+% Call:
+%   PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+%   PF_Plot([3,3,9],'PhaseBlock',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+% ------------------------------------------------------------
+if strcmp(w,'phasestack') || strcmp(w,'phaseblock')
+
+    n = find(any(PHASE ~= 0,2) | TIME(:) ~= 0,1,'last');
+
+    if isempty(n)
+        n = size(PHASE,1);
+    end
+
+    Y = PHASE(1:n,1:Nphase);
+    X = TIME(1:n);
+
+    % If TIME is still empty/zero, use iteration number
+    if all(X == 0)
+        X = (1:n).';
+        xlabel_text = 'iteration';
+    else
+        xlabel_text = 'time';
+    end
+
+    % Normalize each row to exactly sum to 1
+    s = sum(Y,2);
+    good = s > eps;
+
+    for ip = 1:Nphase
+        Y(good,ip) = Y(good,ip) ./ s(good);
+    end
+
+    % Colored stacked blocks
+    h = area(X,Y);
+    set(h,'LineStyle','none')
+
+    cmap = jet(Nphase);
+
+    for ip = 1:Nphase
+        h(ip).FaceColor = cmap(ip,:);
+    end
+
+    hold on
+
+    % Black boundaries between cumulative phase blocks
+    Ycum = cumsum(Y,2);
+
+    for ip = 1:Nphase-1
+        plot(X,Ycum(:,ip),'k-','LineWidth',1.0)
+    end
+
+    % Optional black top and bottom frame
+    plot(X,zeros(size(X)),'k-','LineWidth',0.8)
+    plot(X,ones(size(X)),'k-','LineWidth',0.8)
+
+    hold off
+
+    ylim([0 1])
+    xlim([min(X) max(X)])
+    xlabel(xlabel_text)
+    ylabel('phase fraction')
+    title('Phase proportion')
+    legend(h,phs_name,'Location','eastoutside')
+
     return
 
 end

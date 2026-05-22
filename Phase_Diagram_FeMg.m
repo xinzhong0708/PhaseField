@@ -1,15 +1,16 @@
 clear,addpath ./ ./Thermo/Utilities/ ./Thermo/Solutions/ ./EOS
-T        = linspace( 720, 720 ,1) + 273.15;
-P        = linspace( 0.8, 0.8 ,1) * 1e9;
+T        = linspace(1000,1000 ,1) + 273.15;
+P        = linspace( 2.5, 2.5 ,1) * 1e9;
 solmod   = 'solution_models_PFM';
 % solmod   = 'solution_models_H18';
-Cname    = {'Si'  'Fe'      'Mg'   'Ca' 'Al'      'O'};
-Nsys     = [ 0     0.092860683407368   0.159920622958594   0.008840878057777   0.326054932619434];
+Cname    = {'Si'  'Fe'      'Mg'   'Ca' 'Al'    'Na'  'O'};
+Nsys     = [ 0    0.130955415951136   0.200127032038209   0.056218857518135   0.190079083285261   0.026587583381404];
 Nsys(1)  =  1-sum(Nsys);
 Nsys     = [Nsys Nsys(1)*2+Nsys(2)+Nsys(3)+Nsys(4)+Nsys(5)/2*3];
 % Nsys     = [Nsys Nsys(1)*2+Nsys(2)+Nsys(3)];
 % Choose possible phases to consider in the equilibrium calculation (in the Gibbs minimization)
-phs_name      = {'Olivine','Clinopyroxene','Garnet','Quartz','Corundum','Kyanite','Orthopyroxene'};
+phs_name      = {'Olivine','Corundum','Orthopyroxene','Clinopyroxene','Garnet','Quartz','Kyanite'};
+phs_name      = {'Olivine','Garnet','Feldspar'};
 % phs_name      = {'Olivine','Clinopyroxene'};
 td            =  init_thermo(phs_name,Cname,solmod);
 p             =  props_generate(td);     % generate endmember proportions
@@ -42,8 +43,8 @@ disp(num2str(Npc(:,id)))
 
 % p{1}(id(1),:)
 
-ncol  = 5;
-p_glo = cellfun(@(A) [A, nan(size(A,1), ncol-size(A,2))],p, 'UniformOutput', false);
-p_glo = vertcat(p_glo{:});
-
-p_glo(id,:)
+% ncol  = 5;
+% p_glo = cellfun(@(A) [A, nan(size(A,1), ncol-size(A,2))],p, 'UniformOutput', false);
+% p_glo = vertcat(p_glo{:});
+% 
+% p_glo(id,:)
