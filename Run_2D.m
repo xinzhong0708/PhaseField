@@ -8,25 +8,25 @@ load Map2d.mat
 PHYS.E_sc          =  E_sc;
 PHYS.t_sc          =  1;                                                   % Time scale
 PHYS.L_sc          =  1;                                                   % Length scale
-PHYS.l             =  dx*5/L_sc;                                           % interface thickness (m)
-PHYS.sigma         =  0.1/PHYS.E_sc*PHYS.L_sc^2;                           % surface energy (J/m^2)
-PHYS.kappa         =  1e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
+PHYS.l             =  GRID.dx*5/L_sc;                                      % interface thickness (m)
+PHYS.sigma         =  0.10/PHYS.E_sc*PHYS.L_sc^2;                           % surface energy (J/m^2)
+PHYS.kappa         =  0e-8/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
 PHYS.D_esti        =  1e-12;
 PHYS.chi_ref       =  1e-2;
 PHYS.M0            =  PHYS.D_esti*PHYS.t_sc/PHYS.L_sc^2*PHYS.chi_ref;
 PHYS.m             =  6*PHYS.sigma/PHYS.l;
 PHYS.kap           =  3/4*PHYS.sigma*PHYS.l;
 PHYS.dceq          =  0.5;
-PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/2000;
+PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/50;
 PHYS.eta           =  eta;
 
 %NUMERICS
-NUM.dt_phy         =   5e-4/PHYS.t_sc;
-NUM.dt_max         =    1e0/PHYS.t_sc;
+NUM.dt_phy         =   2e-4/PHYS.t_sc;
+NUM.dt_max         =    1e1/PHYS.t_sc;
 NUM.dt_min         =  1e-16/PHYS.t_sc; 
 NUM.t_tot          =    1e5/PHYS.t_sc;
-NUM.dE_target      =  1e-2;
-NUM.dp_target      =  1e-2;
+NUM.dE_target      =  2e-2;
+NUM.dp_target      =  2e-2;
 NUM.dmu_target     =  1e5;
 NUM.time           =  0;
 NUM.dt_good_count  =  0;
@@ -35,19 +35,19 @@ NUM.dt_grow_fac    =  1.15;
 NUM.dt_shrink_fac  =  0.5;
 NUM.err_grow       =  0.25;
 NUM.phi_mask_cut   =  1e-8;
-NUM.phi_mask_thick =  1;
+NUM.phi_mask_thick =  2;
 NUM.norm_phi       =  1;
 NUM.cut_phi        =  0;
 NUM.norm_E         =  1;
-NUM.int_damp       =  0.1;
+NUM.int_damp       =  0.2;
 NUM.kappa_p_cut    =  1e-5;
-NUM.use_Jphi       =  1;
+NUM.use_Jphi       =  0;
 
 %GRIDS
-GRID.dx            =  dx;
-GRID.dy            =  dy;
-GRID.nx            =  nx;
-GRID.ny            =  ny;
+GRID.dx            =  GRID.dx;
+GRID.dy            =  GRID.dy;
+GRID.nx            =  GRID.nx;
+GRID.ny            =  GRID.ny;
 
 %MODELS
 MODEL.dgdphi       =  @(phi) 2*PHYS.m*phi.*(phi - 1).^2 + PHYS.m*phi.^2.*(2.*phi - 2);
@@ -56,39 +56,39 @@ MODEL.p_fun        =  @(a,phi)   phi(:,:,a).^2./sum(phi.^2,3);
 MODEL.dpdphi       =  @(a,b,phi) (a==b)*2*phi(:,:,b)./sum(phi.^2,3) - 2*phi(:,:,a).*phi(:,:,b).^2./sum(phi.^2,3).^2;
 
 %PARAMETERS
-PARAM.L            =  PHYS.L*ones(ny,nx);
-PARAM.Lm           =  PHYS.L*PHYS.m.*ones(ny,nx);
-PARAM.LK           =  PHYS.L*PHYS.kap.*ones(ny,nx);
-PARAM.Np           =  length(c);
-PARAM.Ne           =  length(E);
-PARAM.M            =  repmat({PHYS.M0*ones(ny,nx)},1,PARAM.Ne);
+PARAM.L            =  PHYS.L*ones(GRID.ny,GRID.nx);
+PARAM.Lm           =  PHYS.L*PHYS.m.*ones(GRID.ny,GRID.nx);
+PARAM.LK           =  PHYS.L*PHYS.kap.*ones(GRID.ny,GRID.nx);
+PARAM.Np           =  length(STATE.c);
+PARAM.Ne           =  length(STATE.E);
+PARAM.M            =  repmat({PHYS.M0*ones(GRID.ny,GRID.nx)},1,PARAM.Ne);
 PARAM.kappa_phase  =  PHYS.kappa .* cellfun(@(x) size(x.n,1) > 1, pars);   % kappa nonzero automatically for phase with >1 endmembers
 PARAM.use_WScale   =  0;                                                   % 1-make excess energy small at interface; 2-do nothing
 
 %STATES
-STATE.c            =  c;
-STATE.e            =  e;
-STATE.E            =  E;
-STATE.mu_e         =  mu_e;
-STATE.chi          =  chi;
-STATE.omg          =  zeros(ny,nx,Np);
-STATE.phi          =  phi;
+STATE.c            =  STATE.c;
+STATE.e            =  STATE.e;
+STATE.E            =  STATE.E;
+STATE.mu_e         =  STATE.mu_e;
+STATE.chi          =  STATE.chi;
+STATE.omg          =  zeros(GRID.ny,GRID.nx,Np);
+STATE.phi          =  STATE.phi;
 STATE.p            =  Calc_p(MODEL,STATE.phi);
-STATE.mask         =  ones(ny,nx,Np);
+STATE.mask         =  ones(GRID.ny,GRID.nx,Np);
 STATE.LE_state     = [   ];
 
 %DISPLAY COMPOSITION
 disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{end-1},'all') mean(STATE.E{end},'all')])
 
-% load 200
-% NUM.dE_target      =  1e-2;
-% NUM.dp_target      =  1e-2;
-% NUM.dt_max         =  5e-1/PHYS.t_sc;
+% load 3400
 
-% load 900
-% PHYS.kappa         =  1e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
-% PARAM.kappa_phase  =  PHYS.kappa .* cellfun(@(x) size(x.n,1) > 1, pars);   % kappa nonzero automatically for phase with >1 endmembers
-
+% PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0)/100;
+% PARAM.L            =  PHYS.L*ones(GRID.ny,GRID.nx);
+% PARAM.Lm           =  PHYS.L*PHYS.m.*ones(GRID.ny,GRID.nx);
+% PARAM.LK           =  PHYS.L*PHYS.kap.*ones(GRID.ny,GRID.nx);
+% NUM.dE_target      =  2e-2;
+% NUM.dp_target      =  2e-2;
+% NUM.dt_max         =    5e0/PHYS.t_sc;
 for it = 1:1e5
     if mod(it,100)==0
         save(num2str(it))
@@ -136,7 +136,7 @@ for it = 1:1e5
         disp(NUM.dt_phy)
         % disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,3))),mean(mean(STATE.p(:,:,4))),mean(mean(STATE.p(:,:,5))),mean(mean(STATE.p(:,:,6))),mean(mean(STATE.p(:,:,7)))])
         disp([mean(mean(STATE.p(:,:,1))),mean(mean(STATE.p(:,:,2))),mean(mean(STATE.p(:,:,end)))])
-        subplot(331);plot(GRID.x,STATE.E{1}(3,:),GRID.x,STATE.E{2}(3,:),GRID.x,STATE.E{3}(3,:),GRID.x,STATE.E{4}(3,:));title('E1')
+        subplot(331);plot(GRID.x,STATE.E{1}(3,:),GRID.x,STATE.E{2}(3,:),GRID.x,STATE.E{3}(3,:),GRID.x,STATE.E{4}(3,:),GRID.x,STATE.E{end}(3,:));title('E1')
         subplot(332);plot(STATE.mu_e{1}(3,:));title('mu_e')
         subplot(333);plot(DTPHY,'b.');title('dt')
         % subplot(334);plot(GRID.x,STATE.phi(3,:,1),'.-',GRID.x,STATE.phi(3,:,2),'.-',GRID.x,STATE.phi(3,:,3),'.-',GRID.x,STATE.phi(3,:,4),'.-',GRID.x,STATE.phi(3,:,5),'.-',GRID.x,STATE.phi(3,:,end-1),'.-',GRID.x,STATE.phi(3,:,end),'.-');title('p2')        
@@ -150,7 +150,7 @@ for it = 1:1e5
         drawnow
     end
 
-    % 
+
     % if mod(it,5)==0
     %     disp(NUM.dt_phy)
     %     disp(PHASE(it,:))

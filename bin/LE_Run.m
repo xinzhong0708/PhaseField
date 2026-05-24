@@ -44,10 +44,10 @@ chi         = Unpack_Chi(chi);
 %Local-equilibrium controls
 Pmax        = 4;
 
-p_tail      = 1e-3;
-p_full      = 5e-2;
-p_on        = 5e-3;
-p_off       = 2e-3;       %Must be smaller than p_on for hysteresis
+p_tail      = 1e-4;
+p_full      = 5e-3;
+p_on        = 5e-4;
+p_off       = 2e-4;       %Must be smaller than p_on for hysteresis
 
 %Damping factors for 1-, 2-, 3- and 4-phase coexistence
 alpha_LE    = [0.7  0.3   0.2   0.1 ];

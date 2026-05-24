@@ -13,13 +13,13 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
 
-eta0             = 1500e10/E_sc;
+eta0             = 1000e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data: unique thermodynamic phases
 % -------------------------------------------------------------------------
 % phs_name         = {'Grt','Fel','Cpx'};
-phs_name         = {'Grt','Cpx','Fel'};
+phs_name         = {'Cpx','Fel'};
 pars_phase       = Load_Data(phs_name);
 Nphase           = length(pars_phase);
 
@@ -29,7 +29,7 @@ Nphase           = length(pars_phase);
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 100*3;
+nx               = 100*2;
 ny               = 4;
 
 x                = linspace(0,Lx,nx);
@@ -57,20 +57,20 @@ GRID.Ly          = Ly/L_sc;
 %  Initial endmember compositions: unique thermodynamic phases
 % -------------------------------------------------------------------------
 c_phase          = cell(1,Nphase);
-
-% Grt
-c_phase{1}{1}    = 0.42*ones(ny,nx);
-c_phase{1}{2}    = 0.48*ones(ny,nx);
+% 
+% % Grt
+% c_phase{1}{1}    = 0.42*ones(ny,nx);
+% c_phase{1}{2}    = 0.48*ones(ny,nx);
 
 % Plagioclase
-c_phase{3}{1}    = 0.47*ones(ny,nx);
+c_phase{2}{1}    = 0.482451116275905*ones(ny,nx);
 
 % Cpx
-c_phase{2}{1}    = 0.11*ones(ny,nx);
-c_phase{2}{2}    = 0.25*ones(ny,nx);
-c_phase{2}{3}    = 0.00*ones(ny,nx);
-c_phase{2}{4}    = 0.04*ones(ny,nx);
-c_phase{2}{5}    = 0.49*ones(ny,nx);
+c_phase{1}{1}    = 0.114534137529231*ones(ny,nx);
+c_phase{1}{2}    = 0.262049548081162*ones(ny,nx);
+c_phase{1}{3}    =-0.002659587107822*ones(ny,nx);
+c_phase{1}{4}    = 0.003821722883813*ones(ny,nx);
+c_phase{1}{5}    = 0.521516950594046*ones(ny,nx);
 
 % %% ------------------------------------------------------------------------
 % %  Initial phase field: random polygonal grains
@@ -173,9 +173,8 @@ MODEL_LE.phase_index = 1:Nphase;
 
 
 %Calculation
-
 tol_pure         = 1e-12;
-p_pair           = 0.05;
+p_pair           = 0e-2;
 
 for ip = 1:Nphase
 
