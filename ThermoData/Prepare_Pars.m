@@ -1,7 +1,7 @@
-clear;figure(1);clf;addpath([cd,'\bin']);addpath([cd,'\Thermo']);addpath([cd,'\Thermo\Solutions'])
+clear;figure(1);clf;addpath('..\bin');addpath('..\Thermo');addpath('..\Thermo\Solutions')
 
 %Pressure Temperature
-T              =  1000 + 273.15;    % K
+T              =  1000 + 273.15;   % K
 P              =  2.5*1e9;         % Pa
 E_sc           =  1e9;             % J
 vref           =  2e-5;            % m3/mol
@@ -13,7 +13,6 @@ Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
 %Phases
 phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar'};
 phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Cor'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        ,'Fel'     };
-scale          =  0;
 for ip = 1:length(phase_all)
 
     %Phase
@@ -21,68 +20,8 @@ for ip = 1:length(phase_all)
     td             =  init_thermo(phs_name,Cname,solmod);
     g0             =  cell2mat(tl_g0(T,P,td));
     n              =  td.n_em(:,1:end-1);
-
-    %Exceptions
-    if strcmp(phase_short{ip},'Olv')==1
-        n(2  ,end)   =  n(2  ,end)+2e-3*scale;
-        n(3  ,end)   =  n(3  ,end)+2e-3*scale;
-        n(4  ,end)   =  n(4  ,end)-4e-3*scale;
-        n(4  ,3  )   =  n(4  ,3  )+1e-3*scale;
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Cpx')==1
-        n(1  ,end)   =  n(1  ,end)+2e-3*scale;
-        n(2  ,end)   =  n(2  ,end)+3e-3*scale;
-        n(3  ,end)   =  n(3  ,end)-2e-3*scale;
-        n(4  ,end)   =  n(4  ,end)+3e-3*scale;
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Opx')==1
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Grt')==1
-        n(1  ,end)   =  n(1  ,end)+2e-3*scale;
-        n(2  ,end)   =  n(2  ,end)+1e-3*scale;
-        n(3  ,end)   =  n(3  ,end)+2e-3*scale;
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Cor')==1
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Qtz')==1
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Spl')==1
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-    if strcmp(phase_short{ip},'Crd')==1
-        gN           = [];
-        nN           = [];
-        penalty      =  0;
-        rank([n ; nN])
-    end
-
+    
+    %Thermodynamic values
     td.n_em(:,1:end-1) =  n;
     pars               =  td;
     pars.n             =  n;
@@ -92,22 +31,6 @@ for ip = 1:length(phase_all)
     pars.E_sc          =  E_sc;
     pars.vref          =  vref;
     pars.phase_name    =  phs_name;
-    pars.gN            =  gN;
-    pars.nN            =  nN;
-    % pars.penalty       =  penalty;
-
-    %Pseudocompound
-    % pp                 =  props_generate(td);
-    % c_psc              =  pp{1};
-    % e_psc              = (c_psc*n)./sum(c_psc*n,2);
-    % pars.c_psc         =  c_psc;
-    % pars.e_psc         =  e_psc;
-    % if isempty(num2cell(pp{1}(:,1:end-1)',2))
-    %     R              =  PhaseThermo(pars,{1});
-    % else
-    %     R              =  PhaseThermo(pars,num2cell(pp{1}(:,1:end-1)',2)');
-    % end
-    % pars.g_psc         =  R.g;
 
     %Saver
     par                =  pars;

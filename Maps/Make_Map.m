@@ -1,8 +1,7 @@
 %% Clear and restart
 clear; figure(3); clf
-addpath([cd,'\bin'])
-addpath([cd,'\Thermo'])
-addpath([cd,'\Thermo\Solutions'])
+addpath('..\bin')
+addpath('..\ThermoData')
 
 %% ------------------------------------------------------------------------
 %  Scaling / basic physical constants used by the map
@@ -14,12 +13,13 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
 
-eta0             = 2000e10/E_sc;
+eta0             = 1500e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data: unique thermodynamic phases
 % -------------------------------------------------------------------------
-phs_name         = {'Olv','Grt','Fel'};
+% phs_name         = {'Grt','Fel','Cpx'};
+phs_name         = {'Grt','Cpx','Fel'};
 pars_phase       = Load_Data(phs_name);
 Nphase           = length(pars_phase);
 
@@ -29,7 +29,7 @@ Nphase           = length(pars_phase);
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 210;
+nx               = 100*3;
 ny               = 4;
 
 x                = linspace(0,Lx,nx);
@@ -58,19 +58,19 @@ GRID.Ly          = Ly/L_sc;
 % -------------------------------------------------------------------------
 c_phase          = cell(1,Nphase);
 
-% Olv
-c_phase{1}{1}    = 0.0063*ones(ny,nx);
-c_phase{1}{2}    = 0.2597*ones(ny,nx);
-c_phase{1}{3}    = 0.5133*ones(ny,nx);
-
-
 % Grt
-c_phase{2}{1}    = 0.4818*ones(ny,nx);
-c_phase{2}{2}    = 0.3943*ones(ny,nx);
+c_phase{1}{1}    = 0.42*ones(ny,nx);
+c_phase{1}{2}    = 0.48*ones(ny,nx);
 
 % Plagioclase
-c_phase{3}{1}    = 0.4000*ones(ny,nx);
+c_phase{3}{1}    = 0.47*ones(ny,nx);
 
+% Cpx
+c_phase{2}{1}    = 0.11*ones(ny,nx);
+c_phase{2}{2}    = 0.25*ones(ny,nx);
+c_phase{2}{3}    = 0.00*ones(ny,nx);
+c_phase{2}{4}    = 0.04*ones(ny,nx);
+c_phase{2}{5}    = 0.49*ones(ny,nx);
 
 % %% ------------------------------------------------------------------------
 % %  Initial phase field: random polygonal grains
@@ -86,82 +86,43 @@ c_phase{3}{1}    = 0.4000*ones(ny,nx);
 % Np                       = Ngrain;                % legacy: number of order parameters/grains
 
 %% ------------------------------------------------------------------------
-%  Initial phase field: pseudo-2D 1D phase bands along x
+%  Initial phase field: pseudo-2D 1D repeating phase bands along x
+%  Example for 3 phases and Nrepeat = 2:
+%      1 2 3 1 2 3
 % -------------------------------------------------------------------------
-Ngrain   = Nphase;
-Np       = Ngrain;     % legacy: number of order parameters/grains
+Nrepeat     = 1;
+grain_phase = repmat(1:Nphase,1,Nrepeat);   % [1 2 3 1 2 3]
+Ngrain      = numel(grain_phase);
+Np          = Ngrain;                        % legacy: number of order parameters/grains
 
-phi      = zeros(GRID.ny,GRID.nx,Ngrain);
-phase_ID = zeros(GRID.ny,GRID.nx);
-grain_ID = zeros(GRID.ny,GRID.nx);
+phi         = zeros(GRID.ny,GRID.nx,Ngrain);
+phase_ID    = zeros(GRID.ny,GRID.nx);
+grain_ID    = zeros(GRID.ny,GRID.nx);
 
-x_edges  = round(linspace(1,GRID.nx+1,Nphase+1));
-
-for iph = 1:Nphase
-
-    ix1 = x_edges(iph);
-    ix2 = x_edges(iph+1) - 1;
-
-    if iph == Nphase
-        ix2 = GRID.nx;
-    end
-
-    phi(:,ix1:ix2,iph)      = 1;
-    phase_ID(:,ix1:ix2)     = iph;
-    grain_ID(:,ix1:ix2)     = iph;
-
-end
-
-grain_phase = (1:Nphase).';
+x_edges     = round(linspace(1,GRID.nx+1,Ngrain+1));
 seed_xy     = zeros(Ngrain,2);
-for iph = 1:Nphase
-    ix1 = x_edges(iph);
-    ix2 = x_edges(iph+1) - 1;
-    if iph == Nphase
-        ix2 = GRID.nx;
-    end
-    seed_xy(iph,1) = mean(GRID.x(ix1:ix2));
-    seed_xy(iph,2) = mean(GRID.y);
-end
 
-%% ------------------------------------------------------------------------
-%  Initial phase field: pseudo-2D 1D phase bands along x
-% -------------------------------------------------------------------------
-Ngrain   = Nphase;
-Np       = Ngrain;     % legacy: number of order parameters/grains
+for ig = 1:Ngrain
 
-phi      = zeros(GRID.ny,GRID.nx,Ngrain);
-phase_ID = zeros(GRID.ny,GRID.nx);
-grain_ID = zeros(GRID.ny,GRID.nx);
+    iph = grain_phase(ig);
 
-x_edges  = round(linspace(1,GRID.nx+1,Nphase+1));
+    ix1 = x_edges(ig);
+    ix2 = x_edges(ig+1) - 1;
 
-for iph = 1:Nphase
-
-    ix1 = x_edges(iph);
-    ix2 = x_edges(iph+1) - 1;
-
-    if iph == Nphase
+    if ig == Ngrain
         ix2 = GRID.nx;
     end
 
-    phi(:,ix1:ix2,iph)      = 1;
-    phase_ID(:,ix1:ix2)     = iph;
-    grain_ID(:,ix1:ix2)     = iph;
+    phi(:,ix1:ix2,ig)    = 1;
+    phase_ID(:,ix1:ix2)  = iph;     % thermodynamic phase label
+    grain_ID(:,ix1:ix2)  = ig;      % grain/order-parameter label
+
+    seed_xy(ig,1)        = mean(GRID.x(ix1:ix2));
+    seed_xy(ig,2)        = mean(GRID.y);
 
 end
 
-grain_phase = (1:Nphase).';
-seed_xy     = zeros(Ngrain,2);
-for iph = 1:Nphase
-    ix1 = x_edges(iph);
-    ix2 = x_edges(iph+1) - 1;
-    if iph == Nphase
-        ix2 = GRID.nx;
-    end
-    seed_xy(iph,1) = mean(GRID.x(ix1:ix2));
-    seed_xy(iph,2) = mean(GRID.y);
-end
+grain_phase = grain_phase(:);
 
 %% ------------------------------------------------------------------------
 %  Grain-resolved MODEL
@@ -270,10 +231,11 @@ for ip = 1:Nphase
         STATE_LOC.mask     = ones(1,Nmask,Nphase);
         STATE_LOC.LE_state = [];
 
-        PARAM_LOC          = PARAM_LE;
-        PARAM_LOC.eta      = eta_slice;
+        PARAM_LOC           = PARAM_LE;
+        PARAM_LOC.eta       = eta_slice;
+        PARAM_LOC.use_WScale= 0;
 
-        STATE_LOC          = LE_Run(STATE_LOC,PARAM_LOC,MODEL_LE);
+        STATE_LOC           = LE_Run(STATE_LOC,PARAM_LOC,MODEL_LE);
 
         for ic = 1:length(STATE_LOC.c{io})
             tmp             = c_phase{io}{ic};

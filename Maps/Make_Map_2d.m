@@ -1,8 +1,7 @@
 %% Clear and restart
 clear; figure(3); clf
-addpath([cd,'\bin'])
-addpath([cd,'\Thermo'])
-addpath([cd,'\Thermo\Solutions'])
+addpath('..\bin')
+addpath('..\ThermoData')
 
 %% ------------------------------------------------------------------------
 %  Scaling / basic physical constants used by the map
@@ -14,12 +13,13 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
 
-eta0             = 2000e10/E_sc;
+eta0             = 1200e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data: unique thermodynamic phases
 % -------------------------------------------------------------------------
-phs_name         = {'Olv','Cpx','Grt','Qtz','Crd','Kya','Opx'};
+% phs_name         = {'Olv','Cpx','Grt','Qtz','Crd','Kya','Opx'};
+phs_name         = {'Grt','Fel','Cpx'};
 pars_phase       = Load_Data(phs_name);
 Nphase           = length(pars_phase);
 
@@ -29,8 +29,8 @@ Nphase           = length(pars_phase);
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 100;
-ny               = 100;
+nx               = 60;
+ny               = 60;
 
 x                = linspace(0,Lx,nx);
 y                = linspace(0,Ly,ny);
@@ -58,35 +58,39 @@ GRID.Ly          = Ly/L_sc;
 % -------------------------------------------------------------------------
 c_phase          = cell(1,Nphase);
 
-% Olv
-c_phase{1}{1}    = 0.0063*ones(ny,nx);
-c_phase{1}{2}    = 0.2597*ones(ny,nx);
-c_phase{1}{3}    = 0.5133*ones(ny,nx);
+% % Olv
+% c_phase{1}{1}    = 0.0063*ones(ny,nx);
+% c_phase{1}{2}    = 0.2597*ones(ny,nx);
+% c_phase{1}{3}    = 0.5133*ones(ny,nx);
 
 % Cpx
-c_phase{2}{1}    = 0.0200*ones(ny,nx);
-c_phase{2}{2}    = 0.1200*ones(ny,nx);
-c_phase{2}{3}    = 0.0300*ones(ny,nx);
-c_phase{2}{4}    = 0.6000*ones(ny,nx);
+c_phase{3}{1}    = 0.0200*ones(ny,nx);
+c_phase{3}{2}    = 0.2000*ones(ny,nx);
+c_phase{3}{3}    = 0.0200*ones(ny,nx);
+c_phase{3}{4}    = 0.1000*ones(ny,nx);
+c_phase{3}{5}    = 0.3000*ones(ny,nx);
 
 % Grt
-c_phase{3}{1}    = 0.4818*ones(ny,nx);
-c_phase{3}{2}    = 0.3943*ones(ny,nx);
+c_phase{1}{1}    = 0.4818*ones(ny,nx);
+c_phase{1}{2}    = 0.3943*ones(ny,nx);
 
-% Qtz
-c_phase{4}{1}    = 1.0000*ones(ny,nx);
+% % Qtz
+% c_phase{4}{1}    = 1.0000*ones(ny,nx);
 
-% Crd
-c_phase{5}{1}    = 1.0000*ones(ny,nx);
+% % Crd
+% c_phase{5}{1}    = 1.0000*ones(ny,nx);
 
-% Kya
-c_phase{6}{1}    = 1.0000*ones(ny,nx);
+% % Kya
+% c_phase{6}{1}    = 1.0000*ones(ny,nx);
 
-% Opx
-c_phase{7}{1}    = 0.4000*ones(ny,nx);
-c_phase{7}{2}    = 0.3000*ones(ny,nx);
-c_phase{7}{3}    = 0.1000*ones(ny,nx);
-c_phase{7}{4}    = 0.0500*ones(ny,nx);
+% % Opx
+% c_phase{7}{1}    = 0.4000*ones(ny,nx);
+% c_phase{7}{2}    = 0.3000*ones(ny,nx);
+% c_phase{7}{3}    = 0.1000*ones(ny,nx);
+% c_phase{7}{4}    = 0.0500*ones(ny,nx);
+
+% Feldspar
+c_phase{2}{1}    = 0.4818*ones(ny,nx);
 
 
 %% ------------------------------------------------------------------------
@@ -94,7 +98,7 @@ c_phase{7}{4}    = 0.0500*ones(ny,nx);
 % -------------------------------------------------------------------------
 MAP_OPT                     = struct();
 MAP_OPT.rng_seed            = 5;
-MAP_OPT.grain_size          = 7e-7/L_sc;
+MAP_OPT.grain_size          = 3e-6/L_sc;
 MAP_OPT.n_grain             = [];
 MAP_OPT.phase_mode          = 'random';              % 'cycle', 'random', 'fractions'
 MAP_OPT.separate_same_phase = true;

@@ -90,7 +90,7 @@ g_mech_real = c_realt * g0;           % N x 1
 % regularized ideal mixing term
 z     = c_realt * zt + 1e-30;
 
-eps0  = 1e-4;
+eps0  = 1e-6;
 sz    = sqrt(z.^2 + eps0.^2);
 lz    = log(z + sz) - log(2);
 

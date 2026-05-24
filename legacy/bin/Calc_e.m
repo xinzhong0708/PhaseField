@@ -11,7 +11,7 @@ for ip = 1:Np
     else
         c_temp  = [c_temp ; 1-sum(c_temp,1)];
     end
-    n           = [pars{ip}.n];
+    n           = [pars{ip}.n ; pars{ip}.nN];
     e_temp      = (c_temp'*n)';
     e_temp      =  e_temp./sum(e_temp,1);
     e{ip}       =  num2cell(e_temp(1:end-1,:),2)';
