@@ -97,6 +97,7 @@ for it = 1:Miter
     if accepted
         c = AddStep(c_old,dc_all,alpha_acc);
     else
+        disp('A')
         c = c_old;
         break
     end
@@ -121,7 +122,7 @@ for it = 1:Miter
     if it == Miter
         disp('Not converged, retrying LE_Calculator...')
         %If failed recall with smaller level
-        level(1)     = 0.1;
+        level(1)     = 0.05;
         [c,mu_e,chi] = LE_Calculator(pars,p,c_init,E,eta,level);
     end
 end

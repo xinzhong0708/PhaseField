@@ -1,8 +1,8 @@
 clear;figure(1);clf;addpath('..\bin');addpath('..\Thermo');addpath('..\Thermo\Solutions')
 
 %Pressure Temperature
-T              =  1000 + 273.15;   % K
-P              =  2.5*1e9;         % Pa
+T              =  800 + 273.15;    % K
+P              =  0.5*1e9;         % Pa
 E_sc           =  1e9;             % J
 vref           =  2e-5;            % m3/mol
 
@@ -13,6 +13,9 @@ Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
 %Phases
 phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar'};
 phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Cor'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        ,'Fel'     };
+
+%Noise
+eps            =  1e-3;
 for ip = 1:length(phase_all)
 
     %Phase
@@ -20,6 +23,10 @@ for ip = 1:length(phase_all)
     td             =  init_thermo(phs_name,Cname,solmod);
     g0             =  cell2mat(tl_g0(T,P,td));
     n              =  td.n_em(:,1:end-1);
+    if size(n)>1
+    n              =  Perturb_n_LE(n,eps);
+    end
+    disp(rank(n))
     
     %Thermodynamic values
     td.n_em(:,1:end-1) =  n;

@@ -44,13 +44,13 @@ chi         = Unpack_Chi(chi);
 %Local-equilibrium controls
 Pmax        = 4;
 
-p_tail      = 1e-4;
-p_full      = 5e-3;
-p_on        = 5e-4;
-p_off       = 2e-4;       %Must be smaller than p_on for hysteresis
+p_tail      = 1e-3;
+p_full      = 5e-2;
+p_on        = 5e-3;
+p_off       = 2e-3;       %Must be smaller than p_on for hysteresis
 
 %Damping factors for 1-, 2-, 3- and 4-phase coexistence
-alpha_LE    = [0.7  0.3   0.2   0.1 ];
+alpha_LE    = [0.8  0.5   0.4   0.3 ];
 iter_LE     = [100  1000  1000  1000];
 
 Np          = numel(c);
@@ -117,11 +117,9 @@ for iset = 1:size(active_sets,1)
         pars_cur = pars(ph_act);
     end
 
-    [c_tmp,mu_tmp,chi_tmp] = LE_Calculator( ...
-        pars_cur,p_cur,c_cur,E_cur,eta,[alpha_LE(k),iter_LE(k)]);
+    [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_cur,p_cur,c_cur,E_cur,eta,[alpha_LE(k),iter_LE(k)]);
 
-    [c,mu_e,chi] = Assign_LE_Back( ...
-        c,mu_e,chi,c_tmp,mu_tmp,chi_tmp,ph_act,mask);
+    [c,mu_e,chi] = Assign_LE_Back(c,mu_e,chi,c_tmp,mu_tmp,chi_tmp,ph_act,mask);
 
 end
 
@@ -136,13 +134,10 @@ Ne      = numel(E);
 omg_col = zeros(ny,nx,Np);
 
 for ip = 1:Np
-
     omg_col(:,:,ip) = reshape(PhaseG(pars{ip},c{ip}),ny,[]);
-
     for ie = 1:Ne
         omg_col(:,:,ip) = omg_col(:,:,ip) - e_col{ip}{ie} .* mu_e{ie};
     end
-
 end
 
 %Copy collapsed results back to grain-resolved variables
@@ -151,11 +146,9 @@ c_out   = cell(1,Ngrain);
 omg     = zeros(ny,nx,Ngrain);
 
 for ig = 1:Ngrain
-
     iph         = grain_to_phase(ig);
     c_out{ig}   = c_col{iph};
     omg(:,:,ig) = omg_col(:,:,iph);
-
 end
 
 %Store collapsed active-set information
