@@ -74,8 +74,8 @@ end
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 60;
-ny               = 60;
+nx               = 80;
+ny               = 80;
 
 %Approximate mean equivalent grain diameter.
 %Ngrain is calculated from total map area / mean grain area.

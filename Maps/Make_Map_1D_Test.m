@@ -1,6 +1,7 @@
 %% Clear and restart
 clear; figure(3); clf
 addpath('..\bin')
+addpath('..\')
 addpath('..\ThermoData')
 
 %% ------------------------------------------------------------------------
@@ -19,19 +20,28 @@ eta0             = 4000e10/E_sc;      %Use the same eta in Run_2D
 %  Edit only this input block when changing the phase assemblage.
 % -------------------------------------------------------------------------
 phs_name         = {'Grt','Cpx','Fel','Olv'};
+% phs_name         = {'Olv','Olv'};
+% phs_name         = {'Olv'};
 pars_phase       = Load_Data(phs_name);
 Nphase           = length(pars_phase);
 
 %Phase proportions from Gibbs minimization, in the same order as phs_name
-phase_prop       = [0.3 0.2 0.3 0.2];
+phase_prop       = [0.3 0.2 0.2 0.3];
+% phase_prop       = [0.5 0.5];
 phase_prop       = phase_prop/sum(phase_prop);
 
 %Independent endmember proportions from Gibbs minimization.
 c_value          = cell(1,Nphase);
-c_value{1}       = [0.30 0.60 ];                 %Grt
-c_value{2}       = [0.04 0.28 0 0.04 0.44];      %Cpx
-c_value{3}       = [0.34];                       %Fel
-c_value{4}       = [0.05 0.40 0.40];             %Olv
+c_value{1}       = [0.45 0.45 ];                 %Grt
+c_value{2}       = [0.04 0.38 0 0.04 0.4];       %Cpx
+c_value{3}       = [0.5 ];                       %Fel
+c_value{4}       = [0.25 0.25 0.35];             %Olv
+% c_value{3}       = [0.24 0.26 0.35];             %Olv
+% c_value{2}       = [0.25 0.24 0.35];             %Olv
+% c_value{1}       = [0.24 0.26 0.35];             %Olv
+
+% c_value{1}       = [0.1550 0.300 0.5];               %Olv
+% c_value{2}       = [0.1451 0.201 0.4];               %Olv
 c_guess          = cell(1,Nphase);
 
 for ip = 1:Nphase
@@ -47,7 +57,7 @@ e_guess          = Calc_e(pars_phase,c_guess);
 E_target         = Calc_E_Tot(e_guess,p_ref);
 Ne               = length(E_target);
 %LE calculation
-[c_ref,mu_ref]   = LE_Calculator(pars_phase,p_ref,c_guess,E_target,eta0,[0.1,2000]);
+[c_ref,mu_ref]   = LE_Calculator(pars_phase,p_ref,c_guess,E_target,eta0,[0.02,2000]);
 
 e_ref            = Calc_e(pars_phase,c_ref);
 E_mix_ref        = Calc_E_Tot(e_ref,p_ref);
@@ -74,7 +84,7 @@ end
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 200;
+nx               = 250;
 ny               = 4;
 
 x                = linspace(0,Lx,nx)/L_sc;
@@ -216,7 +226,7 @@ STATE.LE_state   = [];
 %  Initial LE check before dynamic evolution
 % -------------------------------------------------------------------------
 STATE_INI        = STATE;
-STATE            = LE_Run(STATE,PARAM,MODEL);
+STATE            = LE_Run_Mode(STATE,PARAM,MODEL);
 
 p_phase          = Collapse_p_By_Phase(STATE.p,MODEL.phase_index,Nphase);
 phase_prop_map   = zeros(1,Nphase);

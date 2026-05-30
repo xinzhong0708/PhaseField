@@ -1,6 +1,7 @@
 %% Clear and restart
 clear; figure(3); clf
 addpath('..\bin')
+addpath('..\')
 addpath('..\ThermoData')
 
 %% ------------------------------------------------------------------------
@@ -13,13 +14,13 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
 
-eta0             = 1000e10/E_sc;
+eta0             = 3000e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data: unique thermodynamic phases
 % -------------------------------------------------------------------------
 % phs_name         = {'Grt','Fel','Cpx'};
-phs_name         = {'Cpx','Fel'};
+phs_name         = {'Olv'};
 pars_phase       = Load_Data(phs_name);
 Nphase           = length(pars_phase);
 
@@ -29,7 +30,7 @@ Nphase           = length(pars_phase);
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 100*2;
+nx               = 200;
 ny               = 4;
 
 x                = linspace(0,Lx,nx);
@@ -62,15 +63,26 @@ c_phase          = cell(1,Nphase);
 % c_phase{1}{1}    = 0.42*ones(ny,nx);
 % c_phase{1}{2}    = 0.48*ones(ny,nx);
 
-% Plagioclase
-c_phase{2}{1}    = 0.482451116275905*ones(ny,nx);
 
-% Cpx
-c_phase{1}{1}    = 0.114534137529231*ones(ny,nx);
-c_phase{1}{2}    = 0.262049548081162*ones(ny,nx);
-c_phase{1}{3}    =-0.002659587107822*ones(ny,nx);
-c_phase{1}{4}    = 0.003821722883813*ones(ny,nx);
-c_phase{1}{5}    = 0.521516950594046*ones(ny,nx);
+c_phase{1}{1}    = 0.25*ones(ny,nx);
+c_phase{1}{2}    = 0.25*ones(ny,nx);
+c_phase{1}{3}    = 0.35*ones(ny,nx);
+
+% % 
+
+% c_phase{2}{1}    = 0.22*ones(ny,nx);
+% c_phase{2}{2}    = 0.30*ones(ny,nx);
+% c_phase{2}{3}    = 0.40*ones(ny,nx);
+
+
+% % Grt
+% c_phase{1}{1}    = 0.42*ones(ny,nx);
+% c_phase{1}{2}    = 0.48*ones(ny,nx);
+
+% % 
+% c_phase{2}{1}    = 0.22*ones(ny,nx);
+% c_phase{2}{2}    = 0.30*ones(ny,nx);
+% c_phase{2}{3}    = 0.40*ones(ny,nx);
 
 % %% ------------------------------------------------------------------------
 % %  Initial phase field: random polygonal grains

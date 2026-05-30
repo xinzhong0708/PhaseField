@@ -6,7 +6,7 @@ P             = linspace(0.5 ,0.5,1) * 1e9;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'      'Ca'      'Al'      'Na'    'Si'    'O'};
-Nsys          = [0.168833333333333   0.156416666666666   0.056183333333333   0.176600000000001   0.022400000000000  ];
+Nsys          = [0.186238107898705   0.173578787975318   0.046563409661594   0.156311769892369   0.020117114837967];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 %Choose phases considered in Gibbs minimization

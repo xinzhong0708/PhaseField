@@ -4,7 +4,8 @@ function [STATE,NUM,DIAG] = Update_TimeStep_Soft(STATE,STATE_T,PARAM,MODEL,NUM)
 dt_try = NUM.dt_phy;
 
 %Final LE correction before timestep decision
-STATE_C = LE_Run(STATE_T,PARAM,MODEL);
+% STATE_C = LE_Run(STATE_T,PARAM,MODEL);
+STATE_C = STATE_T;
 
 %Diagnostics on primary evolved fields
 dE = Max_Cell_Diff(STATE_C.E,STATE.E);

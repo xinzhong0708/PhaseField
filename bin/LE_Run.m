@@ -117,7 +117,20 @@ for iset = 1:size(active_sets,1)
         pars_cur = pars(ph_act);
     end
 
-    [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_cur,p_cur,c_cur,E_cur,eta,[alpha_LE(k),iter_LE(k)]);
+    % [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_cur,p_cur,c_cur,E_cur,eta,[alpha_LE(k),iter_LE(k)]);
+
+
+    PARAM.use_mixed_local_LE = 1;
+    mu_cur                   = Slice_E(mu_e,mask);
+
+    if isfield(PARAM,'use_mixed_local_LE') && PARAM.use_mixed_local_LE == 1
+        [c_tmp,mu_tmp,chi_tmp] = LE_Calculator_MixedLocal(pars_cur,p_cur,c_cur,E_cur,mu_cur,eta,[alpha_LE(k),iter_LE(k),0,0]);
+    else
+        [c_tmp,mu_tmp,chi_tmp] = LE_Calculator(pars_cur,p_cur,c_cur,E_cur,eta,[alpha_LE(k),iter_LE(k)]);
+    end
+
+
+
 
     [c,mu_e,chi] = Assign_LE_Back(c,mu_e,chi,c_tmp,mu_tmp,chi_tmp,ph_act,mask);
 

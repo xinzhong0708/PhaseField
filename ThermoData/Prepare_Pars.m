@@ -12,10 +12,11 @@ Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
 
 %Phases
 phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar'};
+% phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar_Pen'};
 phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Cor'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        ,'Fel'     };
 
 %Noise
-eps            =  1e-3;
+eps            =  1e-4;
 for ip = 1:length(phase_all)
 
     %Phase
