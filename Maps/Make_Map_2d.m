@@ -13,7 +13,7 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
 
-eta0             = 1200e10/E_sc;
+eta0             = 4000e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data: unique thermodynamic phases

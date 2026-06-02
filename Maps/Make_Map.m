@@ -20,7 +20,7 @@ eta0             = 3000e10/E_sc;
 %  Thermodynamic data: unique thermodynamic phases
 % -------------------------------------------------------------------------
 % phs_name         = {'Grt','Fel','Cpx'};
-phs_name         = {'Olv'};
+phs_name         = {'Cpx'};
 pars_phase       = Load_Data(phs_name);
 Nphase           = length(pars_phase);
 
@@ -30,8 +30,8 @@ Nphase           = length(pars_phase);
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 200;
-ny               = 4;
+nx               = 100;
+ny               = 100;
 
 x                = linspace(0,Lx,nx);
 y                = linspace(0,Ly,ny);
@@ -64,9 +64,15 @@ c_phase          = cell(1,Nphase);
 % c_phase{1}{2}    = 0.48*ones(ny,nx);
 
 
-c_phase{1}{1}    = 0.25*ones(ny,nx);
-c_phase{1}{2}    = 0.25*ones(ny,nx);
-c_phase{1}{3}    = 0.35*ones(ny,nx);
+% c_phase{1}{1}    = 0.25*ones(ny,nx);
+% c_phase{1}{2}    = 0.25*ones(ny,nx);
+% c_phase{1}{3}    = 0.35*ones(ny,nx);
+
+c_phase{1}{1}    = 0.50*ones(ny,nx);
+c_phase{1}{2}    = 0.22*ones(ny,nx);
+c_phase{1}{3}    = 0.00*ones(ny,nx);
+c_phase{1}{4}    = 0.04*ones(ny,nx);
+c_phase{1}{5}    = 0.21*ones(ny,nx);
 
 % % 
 

@@ -12,7 +12,7 @@ PHYS.L_sc        = 1;
 
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
-eta0             = 4000e10/E_sc;      %Use the same eta in Run_2D
+eta0             = 5000e10/E_sc;      %Use the same eta in Run_2D
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic phases and Gibbs-equilibrium starting values
@@ -29,7 +29,7 @@ phase_prop       = phase_prop/sum(phase_prop);
 %Independent endmember proportions from Gibbs minimization.
 c_value          = cell(1,Nphase);
 c_value{1}       = [0.38 0.51];                  %Grt
-c_value{2}       = [0.02 0.48 0.34 ];            %Olv
+c_value{2}       = [0.25 0.35 0.30 ];            %Olv
 c_value{3}       = [0.11 0.26  0 0.02 0.5];      %Cpx
 c_value{4}       = [0.45 ];                      %Fel
 c_guess          = cell(1,Nphase);

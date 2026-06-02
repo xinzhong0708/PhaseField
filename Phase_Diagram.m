@@ -6,12 +6,12 @@ P             = linspace(0.5 ,0.5,1) * 1e9;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'      'Ca'      'Al'      'Na'    'Si'    'O'};
-Nsys          = [0.186238107898705   0.173578787975318   0.046563409661594   0.156311769892369   0.020117114837967];
+Nsys          = [0.1631    0.1908    0.0484    0.1552    0.0232];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 %Choose phases considered in Gibbs minimization
 phs_name      = {'Garnet','Olivine','Clinopyroxene','Feldspar'};
-phs_name      = {'Garnet','Clinopyroxene','Feldspar','Olivine'};
+phs_name      = {'Garnet','Olivine','Feldspar','Clinopyroxene'};
 td            =  init_thermo(phs_name,Cname,solmod);
 p             =  props_generate(td);     % generate endmember proportions
 
@@ -30,9 +30,8 @@ UB            =   ones(1,length(g));
 
 
 
-
-alph        = alph/sum(alph);
-id          = find(alph > 1e-6);
+alph          = alph/sum(alph);
+id            = find(alph > 1e-6);
 disp(Npc(:,id))
 
 disp('Active phase proportion')

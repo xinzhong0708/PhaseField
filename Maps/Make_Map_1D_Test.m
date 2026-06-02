@@ -85,7 +85,7 @@ Lx               = 5e-6;
 Ly               = 5e-6;
 
 nx               = 250;
-ny               = 4;
+ny               = 7;
 
 x                = linspace(0,Lx,nx)/L_sc;
 y                = linspace(0,Ly,ny)/L_sc;

@@ -1,12 +1,20 @@
 function [STATE,DIAG] = LE_Run_Mode(STATE,PARAM,MODEL)
-%LE_RUN_MODE Simple LE / GP / Auto local equilibrium update.
+%LE_RUN_MODE Simple LE / GP / Auto local thermodynamic update.
 %
-% PARAM.LE_mode = 'LE'   : use LE_Calculator everywhere
-% PARAM.LE_mode = 'GP'   : use projected GP update everywhere
-% PARAM.LE_mode = 'Auto' : use GP only where H_c is positive definite
+% Modes:
+%   PARAM.LE_mode = 'LE'   : E-primary LE_Calculator
+%   PARAM.LE_mode = 'GP'   : mu-primary projected GP closure
+%   PARAM.LE_mode = 'Auto' : GP where H_c is positive definite, LE otherwise
+%
+% Main stabilizations:
+%   1. Active set is selected using p_le, but local mass balance uses
+%      physical p and subtracts inactive phase contributions from E.
+%   2. GP composition update is p-damped, capped, and bounded.
+%   3. GP does not write conserved E unless PARAM.LE_GP_write_E = true.
+%   4. Optional WScale can be used for local solve and optionally for omega.
 
 % -------------------------------------------------------------------------
-% Direct options, no GetOpt / no option wrapper
+% Direct options
 % -------------------------------------------------------------------------
 mode = 'LE';
 if isfield(PARAM,'LE_mode') && ~isempty(PARAM.LE_mode)
@@ -15,29 +23,42 @@ end
 mode = lower(char(mode));
 
 Pmax   = 4;
-p_tail = 1e-5;
+p_tail = 1e-4;
 p_full = 1e-2;
-p_on   = 1e-4;
-p_off  = 5e-5;
+p_on   = 1e-3;
+p_off  = 5e-4;
 
-alpha_LE = [0.5 0.1 0.1 0.1];
+alpha_LE = [0.7 0.4 0.3 0.2];
 iter_LE  = [100 1000 1000 1000];
-iter_GP  = [100 1000 1000 1000];
+iter_GP  = [50 50 50 50];
 
-h_tol    = 1e-8;
-lam_gp   = 0e-10;
-wmu_gp   = 10;
-c_tol    = 1e-7;
+h_tol     = 1e-9;
+lam_gp    = 1e-9;
+wmu_gp    = 100;
+c_tol     = 1e-7;
 write_GP_E = false;
-use_WScale = false;
-wscale_p0  = 0.85;
-wscale_p1  = 0.99;
-wscale_gam = 1;
 
-if isfield(PARAM,'use_WScale'),     use_WScale  = PARAM.use_WScale;     end
-if isfield(PARAM,'WScale_p0'),      wscale_p0   = PARAM.WScale_p0;      end
-if isfield(PARAM,'WScale_p1'),      wscale_p1   = PARAM.WScale_p1;      end
-if isfield(PARAM,'WScale_gam'),     wscale_gam  = PARAM.WScale_gam;     end
+use_WScale       = false;
+use_WScale_omega = false;
+wscale_p0        = 0.85;
+wscale_p1        = 0.99;
+wscale_gam       = 1;
+
+gp_dc_cap   = 0.02;
+gp_c_floor  = 1e-10;
+gp_p_freeze = 1e-4;
+gp_p_solve  = 1e-2;
+
+% In GP mode, keep pure one-phase blocks on LE.
+% This avoids fixed-mu GP projection creating dE spikes in pure regions.
+gp_pure_LE = true;
+
+if isfield(PARAM,'use_WScale'),       use_WScale       = PARAM.use_WScale;       end
+if isfield(PARAM,'use_WScale_omega'), use_WScale_omega = PARAM.use_WScale_omega; end
+if isfield(PARAM,'WScale_p0'),        wscale_p0        = PARAM.WScale_p0;        end
+if isfield(PARAM,'WScale_p1'),        wscale_p1        = PARAM.WScale_p1;        end
+if isfield(PARAM,'WScale_gam'),       wscale_gam       = PARAM.WScale_gam;       end
+
 if isfield(PARAM,'LE_Pmax'),        Pmax        = PARAM.LE_Pmax;        end
 if isfield(PARAM,'LE_p_tail'),      p_tail      = PARAM.LE_p_tail;      end
 if isfield(PARAM,'LE_p_full'),      p_full      = PARAM.LE_p_full;      end
@@ -52,11 +73,17 @@ if isfield(PARAM,'LE_GP_wmu_proj'), wmu_gp      = PARAM.LE_GP_wmu_proj; end
 if isfield(PARAM,'LE_GP_c_tol'),    c_tol       = PARAM.LE_GP_c_tol;    end
 if isfield(PARAM,'LE_GP_write_E'),  write_GP_E  = PARAM.LE_GP_write_E;  end
 
+if isfield(PARAM,'LE_GP_dc_cap'),   gp_dc_cap   = PARAM.LE_GP_dc_cap;   end
+if isfield(PARAM,'LE_GP_c_floor'),  gp_c_floor  = PARAM.LE_GP_c_floor;  end
+if isfield(PARAM,'LE_GP_p_freeze'), gp_p_freeze = PARAM.LE_GP_p_freeze; end
+if isfield(PARAM,'LE_GP_p_solve'),  gp_p_solve  = PARAM.LE_GP_p_solve;  end
+if isfield(PARAM,'LE_GP_pure_LE'),  gp_pure_LE  = PARAM.LE_GP_pure_LE;  end
+
 % -------------------------------------------------------------------------
 % Unpack fields to 1-by-N form
 % -------------------------------------------------------------------------
-ny   = size(STATE.p,1);
-nx   = size(STATE.p,2);
+ny = size(STATE.p,1);
+nx = size(STATE.p,2);
 
 p    = UnpackP(STATE.p);
 c    = UnpackC(STATE.c);
@@ -82,8 +109,6 @@ end
 % Collapse repeated grains into thermodynamic phases
 [pars,c,p,grain_to_phase] = CollapsePhases(pars,c,p,phase_index);
 
-% Keep original pars for final omega.
-% Use softened pars only inside LE/GP local solves.
 pars_orig = pars;
 
 if use_WScale
@@ -120,9 +145,14 @@ for iset = 1:size(active_sets,1)
         pars_cur = pars(ph_act);
     end
 
-    c_blk   = SliceC(c,ph_act,mask);
-    p_blk   = SliceP(p,mask,ph_act);
-    p_blk   = NormalizeP(p_blk);
+    % Active unknowns and active mass balance.
+    % Important:
+    %   p_le selected the active set, but the local solve uses physical p.
+    %   Inactive phase contributions are subtracted from E.
+    [c_blk,p_blk,E_solve_blk,Efix_blk] = SliceActiveMassBalance( ...
+        pars_orig,c,p,E,ph_act,mask);
+
+    % Full conserved E is kept separately for assignment back.
     E_blk   = SliceCell(E,mask);
     mu_blk  = SliceCell(mu_e,mask);
     chi_blk = SliceChi(chi,mask);
@@ -138,10 +168,17 @@ for iset = 1:size(active_sets,1)
         gp_local = false(1,nblk);
     end
 
+    % Minimal mixed-mode rule:
+    % In GP mode, pure one-phase active-set blocks are solved by LE.
+    % Multiphase blocks still use GP.
+    if gp_pure_LE && strcmp(mode,'gp') && k == 1
+        gp_local(:) = false;
+    end
+
     le_local = ~gp_local;
 
     % ---------------------------------------------------------------------
-    % GP nodes: fixed-mu projected update
+    % GP nodes: smooth fixed-mu projected closure
     % ---------------------------------------------------------------------
     if any(gp_local)
 
@@ -152,25 +189,28 @@ for iset = 1:size(active_sets,1)
         c_gp   = SliceC(c_blk,1:k,gp_local);
         p_gp   = SliceP(p_blk,gp_local,1:k);
         mu_gp  = SliceCell(mu_blk,gp_local);
-        E_gp0  = SliceCell(E_blk,gp_local);
+        E_gp0  = SliceCell(E_solve_blk,gp_local);
         eta_gp = eta_blk(gp_local);
 
         pars_gp = SliceParsLocal(pars_cur,gp_local);
 
-        [c_gp,E_gp,chi_gp,niter] = GP_Project(pars_gp,p_gp,c_gp,mu_gp,E_gp0,eta_gp,aa,mm,lam_gp,wmu_gp,c_tol);
+        [c_gp,E_gp_active,chi_gp,niter] = GP_Project( ...
+            pars_gp,p_gp,c_gp,mu_gp,E_gp0,eta_gp,aa,mm, ...
+            lam_gp,wmu_gp,c_tol,gp_dc_cap,gp_c_floor,gp_p_freeze,gp_p_solve);
 
         c_blk   = AssignC(c_blk,1:k,gp_local,c_gp);
         chi_blk = AssignChi(chi_blk,gp_local,chi_gp);
 
         if write_GP_E
-            E_blk = AssignCell(E_blk,gp_local,E_gp);
+            Efix_gp = Efix_blk(:,gp_local);
+            E_gp_full = AddEfixToE(E_gp_active,Efix_gp);
+            E_blk = AssignCell(E_blk,gp_local,E_gp_full);
         end
 
         loc = find(mask);
         mode_map(loc(gp_local)) = 1;
         iter_map(loc(gp_local)) = niter;
     end
-
 
     % ---------------------------------------------------------------------
     % LE nodes: conserved-E local equilibrium
@@ -183,12 +223,13 @@ for iset = 1:size(active_sets,1)
 
         c_le   = SliceC(c_blk,1:k,le_local);
         p_le2  = SliceP(p_blk,le_local,1:k);
-        E_le   = SliceCell(E_blk,le_local);
+        E_le   = SliceCell(E_solve_blk,le_local);
         eta_le = eta_blk(le_local);
 
         pars_le = SliceParsLocal(pars_cur,le_local);
 
-        [c_le,mu_le,chi_le,Dle] = LE_Calculator(pars_le,p_le2,c_le,E_le,eta_le,[aa,mm]);
+        [c_le,mu_le,chi_le,Dle] = LE_Calculator( ...
+            pars_le,p_le2,c_le,E_le,eta_le,[aa,mm]);
 
         c_blk   = AssignC(c_blk,1:k,le_local,c_le);
         mu_blk  = AssignCell(mu_blk,le_local,mu_le);
@@ -199,7 +240,6 @@ for iset = 1:size(active_sets,1)
             iter_map(loc(le_local)) = Dle.iter;
         end
     end
-
 
     % Assign block back
     c    = AssignC(c,ph_act,mask,c_blk);
@@ -216,27 +256,30 @@ E     = PackCell(E,ny);
 mu_e  = PackCell(mu_e,ny);
 chi   = PackChi(chi,ny);
 
-% Final e and omega are evaluated from original thermodynamics.
-% WScale is used only to stabilize the local LE/GP solve.
+% Always calculate e from original thermodynamics
 e_col = Calc_e(pars_orig,c_col);
-omg_col = zeros(ny,nx,Np);
-for ip = 1:Np
-    omg_col(:,:,ip) = reshape(PhaseG(pars_orig{ip},c{ip}),ny,[]);
-    for ie = 1:Ne
-        omg_col(:,:,ip) = omg_col(:,:,ip) - e_col{ip}{ie}.*mu_e{ie};
-    end
-end
 
+% Raw omega from full original thermodynamics
+omg_raw_col = CalcOmegaLocal(pars_orig,c,e_col,mu_e,ny,nx,Ne,Np);
+
+% Omega used by AC
+if use_WScale && use_WScale_omega
+    omg_col = CalcOmegaLocal(pars_inter,c,e_col,mu_e,ny,nx,Ne,Np);
+else
+    omg_col = omg_raw_col;
+end
 
 % Expand thermodynamic phases back to grains
 Ngrain = numel(grain_to_phase);
 c_out  = cell(1,Ngrain);
 omg    = zeros(ny,nx,Ngrain);
+omg_raw = zeros(ny,nx,Ngrain);
 
 for ig = 1:Ngrain
-    iph         = grain_to_phase(ig);
-    c_out{ig}   = c_col{iph};
-    omg(:,:,ig) = omg_col(:,:,iph);
+    iph            = grain_to_phase(ig);
+    c_out{ig}      = c_col{iph};
+    omg(:,:,ig)    = omg_col(:,:,iph);
+    omg_raw(:,:,ig)= omg_raw_col(:,:,iph);
 end
 
 LE_state.phase_index    = phase_index;
@@ -250,15 +293,22 @@ STATE.E        = E;
 STATE.mu_e     = mu_e;
 STATE.chi      = chi;
 STATE.omg      = omg;
+STATE.omg_raw  = omg_raw;
 STATE.LE_state = LE_state;
 
-DIAG.mode        = mode;
-DIAG.mode_map    = reshape(mode_map,ny,[]);
-DIAG.gp_fraction = mean(mode_map == 1);
-DIAG.le_fraction = mean(mode_map == 0);
-DIAG.iter_map    = reshape(iter_map,ny,[]);
-DIAG.active      = active;
-DIAG.p_le        = p_le;
+DIAG.mode              = mode;
+DIAG.mode_map          = reshape(mode_map,ny,[]);
+DIAG.gp_fraction       = mean(mode_map == 1);
+DIAG.le_fraction       = mean(mode_map == 0);
+DIAG.iter_map          = reshape(iter_map,ny,[]);
+DIAG.active            = active;
+DIAG.p_le              = p_le;
+DIAG.use_WScale        = use_WScale;
+DIAG.use_WScale_omega  = use_WScale_omega;
+DIAG.gp_pure_LE        = gp_pure_LE;
+DIAG.WScale_p0         = wscale_p0;
+DIAG.WScale_p1         = wscale_p1;
+DIAG.WScale_gam        = wscale_gam;
 
 end
 
@@ -267,20 +317,27 @@ end
 % GP projected update
 % =========================================================================
 
-function [c,E,chi,niter] = GP_Project(pars,p,c,mu_e,E_in,eta,alpha,Miter,lam,wmu,c_tol)
+function [c,E,chi,niter] = GP_Project( ...
+    pars,p,c,mu_e,E_in,eta,alpha,Miter,lam,wmu,c_tol, ...
+    dc_cap,c_floor,p_freeze,p_solve)
 
 niter = 0;
 
 for it = 1:Miter
+
     niter = it;
 
     dc = GP_Step(pars,p,c,mu_e,E_in,eta,lam,wmu);
+
+    % Stabilize disappearing spinodal phases
+    dc = DampStepByPhaseFraction(dc,p,p_freeze,p_solve);
+    dc = CapCellStep(dc,dc_cap);
 
     if MaxStep(dc) < c_tol
         break
     end
 
-    c = AddStep(c,dc,alpha);
+    c = AddStepBounded(c,dc,alpha,c_floor);
 end
 
 E   = E_FromMu(pars,c,p,mu_e,eta);
@@ -384,8 +441,11 @@ for ip = 1:Np
     p_ip = reshape(p(:,:,ip),1,N);
 
     if isempty(R.mu_c) || isempty(R.H_c) || isempty(R.Jac)
+
         Cphase = zeros(Ne,Ne,N);
+
     else
+
         J  = R.Jac;
         H  = SymPages(R.H_c);
         JT = permute(J,[2 1 3]);
@@ -439,7 +499,7 @@ end
 
 
 % =========================================================================
-% Active set
+% Active-set construction
 % =========================================================================
 
 function [p_le,active,LE_state] = BuildActiveSet(p,LE_state,Pmax,p_tail,p_full,p_on,p_off)
@@ -468,6 +528,7 @@ for i = 1:N
     if sum(active(i,:)) > Pmax
         score = p2(i,:) + 0.5*p_on*active_old(i,:);
         [~,ord] = sort(score,'descend');
+
         active(i,:) = false;
         active(i,ord(1:Pmax)) = true;
     end
@@ -497,11 +558,69 @@ bad = wsum <= eps;
 
 if any(bad(:))
     [~,idmax] = max(p,[],3);
+
     for ip = 1:size(p,3)
         tmp = p_th(:,:,ip);
         tmp(bad & idmax == ip) = 1;
         p_th(:,:,ip) = tmp;
     end
+end
+
+end
+
+
+% =========================================================================
+% Active mass-balance slicing
+% =========================================================================
+
+function [c_blk,p_blk,E_blk,Efix] = SliceActiveMassBalance(pars,c,p,E,ph_act,mask)
+%SLICEACTIVEMASSBALANCE
+% The active set is selected using p_le, but the local mass balance uses
+% physical p. Inactive phase contributions are subtracted from conserved E.
+%
+% E_total = sum_active p_i e_i + sum_inactive p_i e_i
+% E_active = E_total - sum_inactive p_i e_i
+
+Np   = numel(c);
+Ne   = numel(E);
+Nloc = nnz(mask);
+
+c_blk = SliceC(c,ph_act,mask);
+p_blk = SliceP(p,mask,ph_act);
+
+E_blk = SliceCell(E,mask);
+
+inactive = setdiff(1:Np,ph_act);
+Efix = zeros(Ne,Nloc);
+
+for ii = 1:numel(inactive)
+
+    ip = inactive(ii);
+
+    c_tmp = SliceC(c,ip,mask);
+    c_ip  = c_tmp{1};
+
+    R = PhaseThermo(pars{ip},c_ip);
+
+    p_ip = reshape(p(:,mask,ip),1,Nloc);
+    e_ip = StackFields(R.e,Nloc);
+
+    Efix = Efix + e_ip.*p_ip;
+end
+
+for ie = 1:Ne
+    E_blk{ie} = E_blk{ie} - Efix(ie,:);
+end
+
+end
+
+
+function E = AddEfixToE(E_active,Efix)
+
+E = E_active;
+
+for ie = 1:numel(E)
+    E{ie} = reshape(E{ie},1,[]) + Efix(ie,:);
 end
 
 end
@@ -679,7 +798,7 @@ end
 
 
 % =========================================================================
-% Collapse grains with same thermodynamic phase
+% Collapse repeated grains with same thermodynamic phase
 % =========================================================================
 
 function [pars_c,c_c,p_c,grain_to_phase] = CollapsePhases(pars,c,p,phase_index)
@@ -726,6 +845,107 @@ for iph = 1:Nphase
         tmp(good) = num(good)./den(good);
 
         c_c{iph}{ic} = tmp;
+    end
+end
+
+end
+
+
+% =========================================================================
+% Omega
+% =========================================================================
+
+function omg_col = CalcOmegaLocal(pars,c,e_col,mu_e,ny,nx,Ne,Np)
+
+omg_col = zeros(ny,nx,Np);
+
+for ip = 1:Np
+
+    omg_col(:,:,ip) = reshape(PhaseG(pars{ip},c{ip}),ny,[]);
+
+    for ie = 1:Ne
+        omg_col(:,:,ip) = omg_col(:,:,ip) - e_col{ip}{ie}.*mu_e{ie};
+    end
+end
+
+end
+
+
+% =========================================================================
+% GP stabilization helpers
+% =========================================================================
+
+function dc = DampStepByPhaseFraction(dc,p,p_freeze,p_solve)
+
+for ip = 1:numel(dc)
+
+    p_ip = reshape(p(:,:,ip),1,[]);
+
+    w = (p_ip - p_freeze)./(p_solve - p_freeze);
+    w = min(max(w,0),1);
+    w = w.^2.*(3 - 2*w);
+
+    for ic = 1:numel(dc{ip})
+        dc{ip}{ic} = dc{ip}{ic}.*w;
+    end
+end
+
+end
+
+
+function dc = CapCellStep(dc,dc_cap)
+
+if dc_cap <= 0 || isinf(dc_cap)
+    return
+end
+
+amp = zeros(size(dc{1}{1}));
+
+for ip = 1:numel(dc)
+    for ic = 1:numel(dc{ip})
+        amp = max(amp,abs(dc{ip}{ic}));
+    end
+end
+
+fac = ones(size(amp));
+bad = amp > dc_cap;
+fac(bad) = dc_cap./amp(bad);
+
+for ip = 1:numel(dc)
+    for ic = 1:numel(dc{ip})
+        dc{ip}{ic} = dc{ip}{ic}.*fac;
+    end
+end
+
+end
+
+
+function c_new = AddStepBounded(c,dc,alpha,c_floor)
+
+c_new = c;
+
+for ip = 1:numel(c)
+
+    Nc = numel(c{ip});
+    N  = numel(c{ip}{1});
+    X  = zeros(Nc,N);
+
+    for ic = 1:Nc
+        X(ic,:) = c{ip}{ic} + alpha.*dc{ip}{ic};
+    end
+
+    X(~isfinite(X)) = c_floor;
+    X = max(X,c_floor);
+
+    s = sum(X,1);
+    bad = s > 1 - c_floor;
+
+    if any(bad)
+        X(:,bad) = X(:,bad)./s(bad).*(1 - c_floor);
+    end
+
+    for ic = 1:Nc
+        c_new{ip}{ic} = reshape(X(ic,:),size(c{ip}{ic}));
     end
 end
 
@@ -791,19 +1011,6 @@ end
 end
 
 
-function c_new = AddStep(c,dc,alpha)
-
-c_new = c;
-
-for ip = 1:numel(c)
-    for ic = 1:numel(c{ip})
-        c_new{ip}{ic} = c{ip}{ic} + alpha.*dc{ip}{ic};
-    end
-end
-
-end
-
-
 function m = MaxStep(dc)
 
 m = 0;
@@ -815,6 +1022,11 @@ for ip = 1:numel(dc)
 end
 
 end
+
+
+% =========================================================================
+% WScale slicing
+% =========================================================================
 
 function pars_cur = SliceParsWScale(pars_inter,ph_act,mask)
 %SLICEPARSWSCALE Extract nodewise w_scale for one active-set block.
@@ -834,7 +1046,6 @@ for ia = 1:numel(pars_cur)
             pars_cur{ia}.w_scale = ws(mask);
 
         elseif numel(ws) == nnz(mask)
-            % Already sliced. Keep it.
             pars_cur{ia}.w_scale = ws;
 
         else
@@ -849,9 +1060,6 @@ end
 
 function pars_out = SliceParsLocal(pars_in,local_mask)
 %SLICEPARSLOCAL Further slice nodewise w_scale inside one active-set block.
-%
-% pars_in{ip}.w_scale has length nblk.
-% local_mask selects GP or LE nodes inside that block.
 
 pars_out = pars_in;
 
@@ -868,7 +1076,6 @@ for ip = 1:numel(pars_out)
             pars_out{ip}.w_scale = ws(local_mask);
 
         elseif numel(ws) == nnz(local_mask)
-            % Already sliced. Keep it.
             pars_out{ip}.w_scale = ws;
 
         else
@@ -878,9 +1085,4 @@ for ip = 1:numel(pars_out)
     end
 end
 
-end
-
-function p = NormalizeP(p)
-s = sum(p,3);
-p = p ./ max(s,eps);
 end

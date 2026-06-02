@@ -523,12 +523,6 @@ vals = vals(1:k-1);
 A = sparse(rows,cols,vals,Ntot,Ntot);
 
 
-
-
-
-
-
-
 % ------------------------------------------------------------
 % Solve: sparse direct solve with COLAMD column ordering
 % ------------------------------------------------------------
