@@ -14,7 +14,7 @@ PHYS.L_sc        = 1;
 E_sc             = PHYS.E_sc;
 L_sc             = PHYS.L_sc;
 
-eta0             = 3000e10/E_sc;
+eta0             = 4000e10/E_sc;
 
 %% ------------------------------------------------------------------------
 %  Thermodynamic data: unique thermodynamic phases
@@ -30,8 +30,8 @@ Nphase           = length(pars_phase);
 Lx               = 5e-6;
 Ly               = 5e-6;
 
-nx               = 100;
-ny               = 100;
+nx               = 200;
+ny               = 4;
 
 x                = linspace(0,Lx,nx);
 y                = linspace(0,Ly,ny);

@@ -1,12 +1,12 @@
 clear
 addpath ./ ./Thermo/Utilities/ ./Thermo/Solutions/ ./EOS ./glpkmex
 
-T             = linspace(800, 800,1) + 273.15;
-P             = linspace(0.5 ,0.5,1) * 1e9;
+T             = linspace(700, 700,1) + 273.15;
+P             = linspace(1.0 ,1.0,1) * 1e9;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'      'Ca'      'Al'      'Na'    'Si'    'O'};
-Nsys          = [0.1631    0.1908    0.0484    0.1552    0.0232];
+Nsys          = [0.1525    0.2110    0.0436    0.1181    0.0315];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 %Choose phases considered in Gibbs minimization

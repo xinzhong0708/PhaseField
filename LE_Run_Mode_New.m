@@ -8,21 +8,18 @@ function [STATE] = LE_Run_Mode_New(STATE,PARAM,MODEL)
 mode       =  PARAM.LE_mode;
 
 %p mode on and off
+p_tail     =  1e-4;
+p_full     =  1e-2;
 p_on       =  1e-3;
-p_off      =  2e-4;
+p_off      =  5e-4;
 
 %Maximal number of active phases for LE/GP
 Pmax       =  3;
 
 %Local equilibrium parameters
-alpha_LE   = [0.7 0.3 0.3 0.2];
+alpha_LE   = [0.8 0.5 0.4 0.3];
 iter_LE    = [100 100 100 100];
 iter_GP    = [100 100 100 100];
-
-%Interface excess damping
-wscale_p0  =  0.60;
-wscale_p1  =  0.99;
-wscale_gam =  1;
 
 %Unpack fields and prepare the calculation
 ny         =  size(STATE.p,1);
@@ -37,45 +34,66 @@ eta        =  reshape(PARAM.eta,1,[]);
 pars       =  MODEL.pars;
 
 %Phase index of the grains
-phase_index= MODEL.phase_index(:).';
+phase_index=  MODEL.phase_index(:).';
 
-% Collapse repeated grains into thermodynamic phases
+%Collapse repeated grains into thermodynamic phases
 [pars,c,p,grain_to_phase] = CollapsePhases(pars,c,p,phase_index);
 
 %Phase number after collapse
 Np         =  size(p,3);
 Ne         =  numel(E);
-p2         =  reshape(p,N,Np);
 
-% Damping of the interface excess energy
+%Optional active-set controls
+if isfield(PARAM,'LE_p_tail')
+    p_tail = PARAM.LE_p_tail;
+end
+if isfield(PARAM,'LE_p_full')
+    p_full = PARAM.LE_p_full;
+end
+if isfield(PARAM,'LE_p_on')
+    p_on = PARAM.LE_p_on;
+end
+if isfield(PARAM,'LE_p_off')
+    p_off = PARAM.LE_p_off;
+end
+if isfield(PARAM,'LE_Pmax')
+    Pmax = PARAM.LE_Pmax;
+end
+
+Pmax = min(Pmax,Np);
+
+%Optional local equilibrium controls
+if isfield(PARAM,'LE_alpha')
+    alpha_LE = PARAM.LE_alpha;
+end
+if isfield(PARAM,'LE_iter_LE')
+    iter_LE = PARAM.LE_iter_LE;
+end
+if isfield(PARAM,'LE_iter_GP')
+    iter_GP = PARAM.LE_iter_GP;
+end
+
+%Damping of the interface excess energy
 pars_orig      = pars;
-if isfield(PARAM,'use_WScale') && PARAM.use_WScale
-    pars_inter = Apply_WScale_FromP(pars,p,wscale_p0,wscale_p1,wscale_gam);
+if isfield(PARAM,'w_scale_phase') && ~isempty(PARAM.w_scale_phase)
+    pars_inter = Apply_WScale_Map(pars,PARAM.w_scale_phase,ny,nx);
 else
     pars_inter = pars;
 end
 
-%Find the active phase with hysteresis
-if isfield(STATE,'LE_state') && isfield(STATE.LE_state,'active') && isequal(size(STATE.LE_state.active),[N,Np])
-    active_old = STATE.LE_state.active;
+%Find the active phase with smoothed thermodynamic p and hysteresis
+if isfield(STATE,'LE_state') && ~isempty(STATE.LE_state)
+    LE_state_old = STATE.LE_state;
 else
-    active_old = false(N,Np);
-end
-active     = (active_old & (p2 > p_off)) | (~active_old & (p2 > p_on));
-
-%Make sure every grid has at least one active phase
-for i = 1:N
-    if ~any(active(i,:))
-        [~,im] = max(p2(i,:));
-        active(i,im) = true;
-    end
+    LE_state_old = struct();
 end
 
-%Limit maximum number of active phases
-active  =  Limit_Pmax(active,p2,N,Np,Pmax);
+[p_le,p_th,active] = BuildActiveSet_Tail(p,LE_state_old,Pmax,p_tail,p_full,p_on,p_off);
+n_active_map       = reshape(sum(active,2),ny,nx);
 
 %Group grids by active phase set, this will be doing for LE or GP
 [active_sets,~,set_id] = unique(active,'rows');
+set_id_map             = reshape(set_id,ny,nx);
 
 %MAIN PART OF THE LE
 for iset = 1:size(active_sets,1)
@@ -86,11 +104,12 @@ for iset = 1:size(active_sets,1)
     mask         = (set_id == iset).';
 
     %Slice active local problem
-    if PARAM.use_WScale && k > 1
+    if isfield(PARAM,'use_WScale') && PARAM.use_WScale
         pars_loc = SliceParsWScale(pars_inter,ph_act,mask);
     else
         pars_loc = pars(ph_act);
     end
+
     c_loc        = SliceC(c,ph_act,mask);
     p_loc        = SliceP(p,mask,ph_act);
     eta_loc      = eta(mask);
@@ -99,44 +118,28 @@ for iset = 1:size(active_sets,1)
     kk           = min(k,numel(alpha_LE));
     aa           = alpha_LE(kk);
 
-    % %MODE 1: KKS TYPE LOCAL EQUILIBRIUM WITH E AND P FIXED
-    % if strcmpi(mode,'LE')
-    %     mm                     =  iter_LE(kk);
-    %     [~,~,E_loc]            =  SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
-    %     [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
-    % end 
-    % 
-    % %MODE 2: GRAND POTENTIAL (GP) WITH MU_E FIXED
-    % if strcmpi(mode,'GP')
-    %     [~,~,E_loc]            =  SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
-    %     %For one phase, use LE because E is the conserved variable.
-    %     %For multiphase regions, use mass-consistent GP as smooth closure.
-    %     if k == 1
-    %         mm                     =  iter_LE(kk);
-    %         [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
-    %     else
-    %         mm                     =  iter_GP(kk);
-    %         mu_loc                 =  SliceCell(mu_e,mask);
-    %         [c_loc,chi_loc]        =  GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa,mm);
-    %     end
-    % end
-
-
-
-    [~,~,E_loc] = SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
-
-    %Pure phase: use LE because E is conserved and one-phase closure is well-defined
-    if k == 1
+    %MODE 1: KKS TYPE LOCAL EQUILIBRIUM WITH E AND P FIXED
+    if strcmpi(mode,'LE')
         mm                     =  iter_LE(kk);
+        [~,~,E_loc]            =  SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
         [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
-
-        %Coexisting grid: use mass-consistent GP to avoid branch-jumpy interface LE
-    else
-        mm                     =  iter_GP(kk);
-        mu_loc                 =  SliceCell(mu_e,mask);
-        [c_loc,chi_loc]        =  GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa,mm);
     end
 
+    %MODE 2: GRAND POTENTIAL (GP) WITH MU_E FIXED
+    if strcmpi(mode,'GP')
+        [~,~,E_loc]            =  SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
+
+        %For one phase, use LE because E is the conserved variable.
+        %For multiphase regions, use mass-consistent GP as smooth closure.
+        if k == 1
+            mm                     =  iter_LE(kk);
+            [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
+        else
+            mm                     =  iter_GP(kk);
+            mu_loc                 =  SliceCell(mu_e,mask);
+            [c_loc,chi_loc]        =  GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa,mm);
+        end
+    end
 
     %Assign back
     c    = AssignC(c,ph_act,mask,c_loc);
@@ -153,14 +156,14 @@ E           = PackCell(E,ny);
 mu_e        = PackCell(mu_e,ny);
 chi         = PackChi(chi,ny);
 
-% Always calculate e from original thermodynamics
+%Always calculate e from original thermodynamics
 e_col       = Calc_e(pars_orig,c_col);
 
-% Raw omega from full original thermodynamics
+%Raw omega from full original thermodynamics
 omg_raw_col = CalcOmegaLocal(pars_orig,c,e_col,mu_e,ny,nx,Ne,Np);
 omg_col     = omg_raw_col;
 
-% Expand thermodynamic phases back to grains
+%Expand thermodynamic phases back to grains
 Ngrain      = numel(grain_to_phase);
 c_out       = cell(1,Ngrain);
 omg         = zeros(ny,nx,Ngrain);
@@ -173,13 +176,45 @@ for ig = 1:Ngrain
     omg_raw(:,:,ig) = omg_raw_col(:,:,iph);
 end
 
-% Save active-set memory
+%Save active-set memory
 LE_state                 =  struct();
 LE_state.active          =  active;
+LE_state.p_le            =  p_le;
+LE_state.p_th            =  p_th;
 LE_state.phase_index     =  phase_index;
 LE_state.grain_to_phase  =  grain_to_phase;
+LE_state.n_active_map    =  n_active_map;
+LE_state.set_id_map      =  set_id_map;
+LE_state.p_tail          =  p_tail;
+LE_state.p_full          =  p_full;
+LE_state.p_on            =  p_on;
+LE_state.p_off           =  p_off;
+LE_state.Pmax            =  Pmax;
 
-% Update STATE
+%Regularize chi
+if isfield(PARAM,'regularize_chi_all') && PARAM.regularize_chi_all == 1
+    if isfield(PARAM,'chi_reg_floor')
+        chi_floor = PARAM.chi_reg_floor;
+    else
+        chi_floor = 1e-8;
+    end
+    mask_all = true(ny,nx);
+    chi      = RegularizeChi_OnMask(chi,mask_all,chi_floor);
+end
+
+if isfield(PARAM,'smooth_chi_all') && PARAM.smooth_chi_all == 1
+    if isfield(PARAM,'smooth_chi_iter')
+        nsmooth = PARAM.smooth_chi_iter;
+    else
+        nsmooth = 1;
+    end
+    chi = SmoothChi_Local(chi,nsmooth);
+    if isfield(PARAM,'chi_reg_floor')
+        chi = RegularizeChi_OnMask(chi,true(ny,nx),PARAM.chi_reg_floor);
+    end
+end
+
+%Update STATE
 STATE.c        = c_out;
 STATE.e        = Calc_e(MODEL.pars,c_out);
 STATE.E        = E;
@@ -196,13 +231,16 @@ end
 % Omega
 % =========================================================================
 function omg_col = CalcOmegaLocal(pars,c,e_col,mu_e,ny,nx,Ne,Np)
+
 omg_col = zeros(ny,nx,Np);
+
 for ip = 1:Np
     omg_col(:,:,ip) = reshape(PhaseG(pars{ip},c{ip}),ny,[]);
     for ie = 1:Ne
         omg_col(:,:,ip) = omg_col(:,:,ip) - e_col{ip}{ie}.*mu_e{ie};
     end
 end
+
 end
 
 
@@ -211,54 +249,75 @@ end
 % =========================================================================
 function pars_cur = SliceParsWScale(pars_inter,ph_act,mask)
 %SLICEPARSWSCALE Extract nodewise w_scale for one active-set block.
+
 pars_cur = pars_inter(ph_act);
+
 for ia = 1:numel(pars_cur)
 
     if isfield(pars_cur{ia},'w_scale') && ~isempty(pars_cur{ia}.w_scale)
+
         ws = reshape(pars_cur{ia}.w_scale,1,[]);
+
         if isscalar(ws)
+
             pars_cur{ia}.w_scale = ws;
 
         elseif numel(ws) == numel(mask)
+
             pars_cur{ia}.w_scale = ws(mask);
 
         elseif numel(ws) == nnz(mask)
+
             pars_cur{ia}.w_scale = ws;
+
         end
     end
 end
+
 end
+
 
 % =========================================================================
 % Pack / unpack
 % =========================================================================
 function p = UnpackP(p)
+
 [ny,nx,np] = size(p);
 p          = reshape(p,1,ny*nx,np);
+
 end
 
+
 function c = UnpackC(c)
+
 for ip = 1:numel(c)
     for ic = 1:numel(c{ip})
         c{ip}{ic} = reshape(c{ip}{ic},1,[]);
     end
 end
+
 end
 
+
 function f = UnpackCell(f)
+
 for i = 1:numel(f)
     f{i} = reshape(f{i},1,[]);
 end
+
 end
 
 
 function ch = UnpackChi(ch)
+
 for i = 1:size(ch,1)
     for j = 1:size(ch,2)
         ch{i,j} = reshape(ch{i,j},1,[]);
     end
 end
+
 end
+
 
 function c = PackC(c,ny)
 
@@ -311,25 +370,33 @@ p_c    = zeros(1,N,Nphase);
 c_c    = cell(1,Nphase);
 
 for iph = 1:Nphase
+
     grains      = find(grain_to_phase == iph);
     ig0         = grains(1);
     pars_c{iph} = pars{ig0};
+
     for ig = grains
         p_c(:,:,iph) = p_c(:,:,iph) + p(:,:,ig);
     end
+
     Nc          = numel(c{ig0});
     den         = reshape(p_c(:,:,iph),1,N);
     good        = den > eps;
     c_c{iph}    = cell(1,Nc);
 
     for ic = 1:Nc
-        num     = zeros(1,N);
-        for ig  = grains
+
+        num = zeros(1,N);
+
+        for ig = grains
             num = num + reshape(p(:,:,ig),1,N).*reshape(c{ig}{ic},1,N);
         end
+
         tmp = reshape(c{ig0}{ic},1,N);
         tmp(good) = num(good)./den(good);
+
         c_c{iph}{ic} = tmp;
+
     end
 end
 
@@ -338,6 +405,7 @@ end
 
 %Slice active phases and subtract inactive phase contribution from E
 function [c_blk,p_blk,E_blk] = SliceActiveMassBalance(pars,c,p,E,ph_act,mask)
+
 Np    = numel(c);
 Ne    = numel(E);
 Nloc  = nnz(mask);
@@ -359,6 +427,7 @@ for ii = 1:numel(inactive)
     e_ip  = StackFields(R.e,Nloc);
 
     Efix  = Efix + e_ip.*p_ip;
+
 end
 
 for ie = 1:Ne
@@ -369,251 +438,247 @@ end
 
 
 function c2 = SliceC(c,ph,mask)
+
 c2 = cell(1,numel(ph));
+
 for a = 1:numel(ph)
+
     ip    = ph(a);
     c2{a} = cell(size(c{ip}));
+
     for ic = 1:numel(c{ip})
         x          = reshape(c{ip}{ic},1,[]);
         c2{a}{ic} = x(mask);
     end
 end
+
 end
+
 
 function p2 = SliceP(p,mask,ph)
+
 p2 = p(:,mask,ph);
 p2 = reshape(p2,1,nnz(mask),numel(ph));
+
 end
 
+
 function f2 = SliceCell(f,mask)
+
 f2 = cell(size(f));
+
 for i = 1:numel(f)
-    x     = reshape(f{i},1,[]);
-    f2{i}= x(mask);
+    x      = reshape(f{i},1,[]);
+    f2{i} = x(mask);
 end
+
 end
 
 
 function c = AssignC(c,ph,mask,c_sub)
+
 for a = 1:numel(ph)
+
     ip = ph(a);
+
     for ic = 1:numel(c{ip})
-        x              = reshape(c{ip}{ic},1,[]);
-        x(mask)        = reshape(c_sub{a}{ic},1,[]);
-        c{ip}{ic}      = x;
+        x         = reshape(c{ip}{ic},1,[]);
+        x(mask)   = reshape(c_sub{a}{ic},1,[]);
+        c{ip}{ic} = x;
     end
 end
+
 end
 
 
 function f = AssignCell(f,mask,f_sub)
+
 for i = 1:numel(f)
     x       = reshape(f{i},1,[]);
     x(mask) = reshape(f_sub{i},1,[]);
     f{i}    = x;
 end
+
 end
+
 
 function ch = AssignChi(ch,mask,ch_sub)
+
 Ne = size(ch,1);
+
 for i = 1:Ne
     for j = 1:Ne
-        x          = reshape(ch{i,j},1,[]);
-        x(mask)    = reshape(ch_sub{i,j},1,[]);
-        ch{i,j}    = x;
+        x       = reshape(ch{i,j},1,[]);
+        x(mask) = reshape(ch_sub{i,j},1,[]);
+        ch{i,j} = x;
     end
 end
+
 end
 
+
 function A = StackFields(fields,N)
+
 A = zeros(numel(fields),N);
+
 for i = 1:numel(fields)
     A(i,:) = reshape(fields{i},1,N);
 end
-end
 
-function [active] = Limit_Pmax(active,p2,N,Np,Pmax)
-nact = sum(active,2);
-bad  = nact > Pmax;
-if any(bad)
-    [~,ord]       = sort(p2,2,'descend');
-    keep          = false(N,Np);
-    row           = repmat((1:N)',1,Pmax);
-    col           = ord(:,1:Pmax);
-    ind           = sub2ind([N,Np],row,col);
-    keep(ind)     = true;
-    active(bad,:) = keep(bad,:);
-end
 end
 
 
-% =========================================================================
-% GP calculator
-% =========================================================================
-function [c,chi] = GP_Calculator(pars,p,c,mu_e,E_in,eta,alpha,Miter)
-c_tol = 1e-6;
-wmu   = 10;
-lam   = 1e-8;
-for it = 1:Miter
-    dc = GP_Step_MassConsistent(pars,p,c,mu_e,E_in,eta,lam,wmu);
-    dc_step = ScaleStep(dc,alpha);
-    if MaxStep(dc_step) < c_tol
-        break
-    end
-    c  = AddStep(c,dc,alpha);
-end
-if it == Miter
-    disp('GP fails'); 
-end
-Ne  = numel(mu_e);
-chi = Chi_FromMu_Projected(pars,p,c,eta,Ne,lam,wmu);
-end
+function pars_cur = Apply_WScale_Map(pars,w_scale_phase,ny,nx)
 
-function dc = ScaleStep(dc,alpha)
-for ip = 1:numel(dc)
-    for ic = 1:numel(dc{ip})
-        dc{ip}{ic} = alpha.*dc{ip}{ic};
-    end
-end
-end
-
-% =========================================================================
-% GP step: fixed mu_e
-% =========================================================================
-function dc = GP_Step_MassConsistent(pars,p,c,mu_e,E_in,eta,lam,wmu)
-Np     = numel(c);
-Ne     = numel(mu_e);
-N      = numel(mu_e{1});
-mu_mat = StackFields(mu_e,N);
-E_mat  = StackFields(E_in,N);
-eta_v  = EtaVector(eta,N);
-dc     = ZeroStepLike(c);
-Emix   = zeros(Ne,N);
-Rall   = cell(1,Np);
-%Current mixture composition
-for ip = 1:Np
-    Rall{ip} = PhaseThermo(pars{ip},c{ip});
-    p_ip     = reshape(p(:,:,ip),1,N);
-    Emix     = Emix + StackFields(Rall{ip}.e,N).*p_ip;
-end
-%Mass residual: E = Emix + mu/eta
-R_E_global = E_mat - Emix - mu_mat./eta_v;
-
-%Residual distribution weight
-psum2 = zeros(1,N);
-for jp = 1:Np
-    p_j   = reshape(p(:,:,jp),1,N);
-    psum2 = psum2 + p_j.^2;
-end
-psum2 = max(psum2,eps);
+pars_cur = pars;
+Np       = numel(pars);
 
 for ip = 1:Np
-    R = Rall{ip};
-    if isempty(R.mu_c) || isempty(R.H_c) || isempty(R.Jac)
-        continue
-    end
-    J    = R.Jac;
-    H    = SymPages(R.H_c);
-    JT   = permute(J,[2 1 3]);
-    HT   = permute(H,[2 1 3]);
-    Nc   = size(H,1);
-    mu_c = StackFields(R.mu_c,N);
-    %Chemical-potential residual: %   mu_c = J' * mu_e
-    R_mu = reshape(pagemtimes(JT,reshape(mu_mat,Ne,1,N)),Nc,N) - mu_c;
-    %This phase contributes to the mass residual in proportion to p_ip
-    p_ip = reshape(p(:,:,ip),1,N);
-    R_E  = R_E_global.*p_ip./psum2;
-    %Solve mixed local projection: J dc  ~= R_E  and   H dc  ~= R_mu
-    A = pagemtimes(JT,J) + wmu*pagemtimes(HT,H) + repmat(eye(Nc),1,1,N).*lam;
-    b = pagemtimes(JT,reshape(R_E,Ne,1,N)) + wmu*pagemtimes(HT,reshape(R_mu,Nc,1,N));
-    d = reshape(pagemldivide(A,b),Nc,N);
-    for ic = 1:Nc
-        dc{ip}{ic} = d(ic,:);
-    end
-end
-end
 
+    ws = w_scale_phase(:,:,ip);
 
-% =========================================================================
-% GP susceptibility: chi = dE/dmu_e = sum_ip p_ip * de_ip/dmu_e + I/eta
-% =========================================================================
-function chi = Chi_FromMu_Projected(pars,p,c,eta,Ne,lam,wmu)
-Np    = numel(c);
-N     = numel(c{1}{1});
-eta_v = EtaVector(eta,N);
-Cmix  = zeros(Ne,Ne,N);
-for ip = 1:Np
-    R    = PhaseThermo(pars{ip},c{ip});
-    p_ip = reshape(p(:,:,ip),1,N);
-    if isempty(R.mu_c) || isempty(R.H_c) || isempty(R.Jac)
-        Cphase = zeros(Ne,Ne,N);
+    if isscalar(ws)
+        pars_cur{ip}.w_scale = ws;
     else
-        J      = R.Jac;
-        H      = SymPages(R.H_c);
-        JT     = permute(J,[2 1 3]);
-        HT     = permute(H,[2 1 3]);
-        Nc     = size(H,1);
-        A      = pagemtimes(JT,J) + wmu*pagemtimes(HT,H) + repmat(eye(Nc),1,1,N).*lam;
-        B      = wmu*pagemtimes(HT,JT);
-        Cphase = pagemtimes(J,pagemldivide(A,B));
+        pars_cur{ip}.w_scale = reshape(ws,1,ny*nx);
     end
-    Cmix = Cmix + Cphase.*reshape(p_ip,1,1,N);
-end
-I   = repmat(eye(Ne),1,1,N);
-chi = PagesToChi(Cmix + I.*reshape(1./eta_v,1,1,N),Ne);
+
 end
 
-
-% =========================================================================
-% GP helpers
-% =========================================================================
-function H = SymPages(H)
-H = 0.5*(H + permute(H,[2 1 3]));
 end
 
 
-function dc = ZeroStepLike(c)
-dc = c;
-for ip = 1:numel(c)
-    for ic = 1:numel(c{ip})
-        dc{ip}{ic} = zeros(size(c{ip}{ic}));
+function chi = SmoothChi_Local(chi,nsmooth)
+
+Ne  = size(chi,1);
+ker = [1 2 1; 2 4 2; 1 2 1];
+ker = ker/sum(ker(:));
+
+for it = 1:nsmooth
+    for i = 1:Ne
+        for j = 1:Ne
+            chi{i,j} = conv2(chi{i,j},ker,'same');
+        end
     end
 end
+
 end
 
 
-function m = MaxStep(dc)
-m = 0;
-for ip = 1:numel(dc)
-    for ic = 1:numel(dc{ip})
-        m = max(m,max(abs(dc{ip}{ic})));
+function chi = RegularizeChi_OnMask(chi,mask,chi_floor)
+
+Ne  = size(chi,1);
+ids = find(mask(:));
+
+for kk = 1:numel(ids)
+
+    id = ids(kk);
+    C  = zeros(Ne,Ne);
+
+    for i = 1:Ne
+        for j = 1:Ne
+            tmp    = chi{i,j};
+            C(i,j) = tmp(id);
+        end
     end
-end
-end
 
+    C     = 0.5*(C+C.');
+    [V,D] = eig(C);
+    lam   = diag(D);
+    scale = max(1,max(abs(lam)));
+    lam   = max(lam,chi_floor*scale);
+    Creg  = V*diag(lam)*V.';
+    Creg  = 0.5*(Creg+Creg.');
 
-function c_new = AddStep(c,dc,alpha)
-c_new = c;
-for ip = 1:numel(c)
-    for ic = 1:numel(c{ip})
-        c_new{ip}{ic} = c{ip}{ic} + alpha.*dc{ip}{ic};
+    for i = 1:Ne
+        for j = 1:Ne
+            tmp      = chi{i,j};
+            tmp(id)  = Creg(i,j);
+            chi{i,j} = tmp;
+        end
     end
-end
+
 end
 
-function eta_v = EtaVector(eta,N)
-if isscalar(eta)
-    eta_v = eta*ones(1,N);
+end
+
+
+function [p_le,p_th,active] = BuildActiveSet_Tail(p,LE_state,Pmax,p_tail,p_full,p_on,p_off)
+
+N  = size(p,2);
+Np = size(p,3);
+
+%Absolute smoothed phase amount used for active-set decision.
+%This is not normalized.
+p_abs = CalcThermoWeight_Tail(p,p_tail,p_full);
+p2    = reshape(p_abs,N,Np);
+
+%Normalized thermodynamic p only for diagnostics.
+p_th = p_abs./max(sum(p_abs,3),eps);
+
+bad = sum(p_abs,3) <= eps;
+
+if any(bad(:))
+
+    [~,idmax] = max(p,[],3);
+
+    for ip = 1:Np
+        tmp = p_th(:,:,ip);
+        tmp(bad & idmax == ip) = 1;
+        p_th(:,:,ip) = tmp;
+    end
+
+end
+
+%Hysteresis memory
+if isfield(LE_state,'active') && isequal(size(LE_state.active),[N,Np])
+    active_old = LE_state.active;
 else
-    eta_v = reshape(eta,1,N);
-end
+    active_old = false(N,Np);
 end
 
-function chi = PagesToChi(A,Ne)
-chi = cell(Ne,Ne);
-for i = 1:Ne
-    for j = 1:Ne
-        chi{i,j} = reshape(A(i,j,:),1,[]);
+%Active decision based on absolute smoothed amount
+active = (active_old & (p2 > p_off)) | (~active_old & (p2 > p_on));
+
+%Make sure every grid has at least one active phase
+p_phys = reshape(p,N,Np);
+
+for i = 1:N
+
+    if ~any(active(i,:))
+        [~,im] = max(p_phys(i,:));
+        active(i,im) = true;
+    end
+
+    %Limit maximum number of active phases
+    if sum(active(i,:)) > Pmax
+
+        score = p2(i,:) + 0.5*p_on*active_old(i,:);
+
+        %Use physical p as fallback tie-breaker
+        score = score + 1e-12*p_phys(i,:);
+
+        [~,ord] = sort(score,'descend');
+
+        active(i,:) = false;
+        active(i,ord(1:Pmax)) = true;
+
     end
 end
+
+%Normalized active p for diagnostics only
+p_le = p_abs.*reshape(active,1,N,Np);
+p_le = p_le./max(sum(p_le,3),eps);
+
+end
+
+
+function p_abs = CalcThermoWeight_Tail(p,p_tail,p_full)
+
+x = (p - p_tail)./(p_full - p_tail);
+x = min(max(x,0),1);
+
+%Absolute smooth turn-on. Do not normalize here.
+p_abs = p.*x.^2.*(3 - 2*x);
+
 end

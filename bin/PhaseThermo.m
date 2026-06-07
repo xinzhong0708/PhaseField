@@ -17,8 +17,9 @@ function [Result] = PhaseThermo(pars,c)
 % -------------------------------------------------------------------------
 % unpack input
 % -------------------------------------------------------------------------
+c      = UnpackC(c);
 if iscell(c)
-    c = cell2mat(c');
+    c  = cell2mat(c');
 end
 
 % -------------------------------------------------------------------------
@@ -27,7 +28,6 @@ end
 P      = pars.P/1e8;
 T      = pars.T;
 RT     = 8.3144*T;
-
 mtpl   = pars.mtpl;
 zt     = pars.zt;
 alp    = pars.alp;
@@ -322,4 +322,11 @@ Result.Jac    = Je_red;
 Result.c_full = c_full;
 Result.c_real = c_real;
 Result.c_pen  = c_pen;
+end
+
+
+function c = UnpackC(c)
+for ic = 1:numel(c)
+    c{ic} = reshape(c{ic},1,[]);
+end
 end

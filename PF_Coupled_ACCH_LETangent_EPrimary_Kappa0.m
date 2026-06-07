@@ -1,16 +1,26 @@
-function [STATE_NEW,DIAG] = PF_Coupled_ACCH_LETangent(STATE_REF,PARAM,MODEL,GRID,PHYS,NUM,STATE_COEF)
-%PF_COUPLED_ACCH_LETANGENT
+function [STATE_NEW,DIAG] = PF_Coupled_ACCH_LETangent_EPrimary_Kappa0(STATE_REF,PARAM,MODEL,GRID,PHYS,NUM,STATE_COEF)
+%PF_COUPLED_ACCH_LETANGENT_EPRIMARY_KAPPA0
 %
-% Masked coupled AC-CH tangent solve for many grains.
+% Masked coupled AC-CH tangent solve with E as primary chemical unknown.
+%
+% This is a kappa=0 test version.
 %
 % Unknowns:
-%   x = [active dphi_grain ; global dmu]
+%   x = [active dphi_grain ; global dE]
 %
-% STATE_REF.phi, STATE_REF.p, STATE_REF.e, STATE_REF.omg are grain-sized.
-% MODEL.phase_index is not used directly here; LE_Run should already expand
-% e and omega back to grain size.
+% Local tangent:
+%   dE = chi*dmu + B*dphi
 %
-% This function does not call LE_Run.
+% Therefore:
+%   dmu = xi*(dE - B*dphi), where xi = inv(chi)
+%
+% CH row:
+%   dE/dt + D*dmu = -D*mu_ref
+%
+% AC row:
+%   AC(dphi) - L*B*dmu = RHS
+%
+% This avoids reconstructing E after solving dmu. E is solved directly.
 
 if nargin < 7 || isempty(STATE_COEF)
     STATE_COEF = STATE_REF;
@@ -30,7 +40,6 @@ mu_ref  = STATE_REF.mu_e;
 chi0 = STATE_COEF.chi;
 e0   = STATE_COEF.e;
 
-
 % ------------------------------------------------------------
 % Sizes
 % ------------------------------------------------------------
@@ -44,20 +53,17 @@ dy = GRID.dy;
 
 dx2 = dx^2;
 dy2 = dy^2;
-dx4 = dx2^2;
-dy4 = dy2^2;
 
 % ------------------------------------------------------------
-% Spatially varying kappa for CH gradient stabilization
+% Invert chi locally
 % ------------------------------------------------------------
-if isfield(PARAM,'kappa_eff') && ~isempty(PARAM.kappa_eff)
-    kappa_eff = PARAM.kappa_eff;
-    if isscalar(kappa_eff)
-        kappa_eff = kappa_eff * ones(ny,nx);
-    end
+if isfield(PARAM,'xi_floor')
+    xi_floor = PARAM.xi_floor;
 else
-    kappa_eff = PHYS.kappa * ones(ny,nx);
+    xi_floor = 1e-10;
 end
+
+xi0 = InvertChi_Local(chi0,xi_floor);
 
 % ------------------------------------------------------------
 % Build AC source using old geometry but coefficient omega
@@ -68,10 +74,6 @@ STATE_SRC.chi   = STATE_COEF.chi;
 STATE_SRC.e     = STATE_COEF.e;
 STATE_SRC.omg   = STATE_COEF.omg;
 
-% ------------------------------------------------------------
-% AC source stabilizer
-% Default: off, because it changes effective AC kinetics.
-% ------------------------------------------------------------
 if isfield(NUM,'use_Aac') && NUM.use_Aac == 1
     if isfield(NUM,'Aac_fac')
         Aac_fac = NUM.Aac_fac;
@@ -101,34 +103,14 @@ jjR  = refJ(jj,+1);
 iiU  = refI(ii,-1);
 iiD  = refI(ii,+1);
 
-jjL2 = refJ(jj,-2);
-jjR2 = refJ(jj,+2);
-iiU2 = refI(ii,-2);
-iiD2 = refI(ii,+2);
-
-iiUR = refI(ii,-1); jjUR = refJ(jj,+1);
-iiDR = refI(ii,+1); jjDR = refJ(jj,+1);
-iiUL = refI(ii,-1); jjUL = refJ(jj,-1);
-iiDL = refI(ii,+1); jjDL = refJ(jj,-1);
-
-idx_c  = sub2ind([ny,nx], ii,   jj);
-idx_L  = sub2ind([ny,nx], ii,   jjL);
-idx_R  = sub2ind([ny,nx], ii,   jjR);
-idx_U  = sub2ind([ny,nx], iiU,  jj);
-idx_D  = sub2ind([ny,nx], iiD,  jj);
-
-idx_L2 = sub2ind([ny,nx], ii,   jjL2);
-idx_R2 = sub2ind([ny,nx], ii,   jjR2);
-idx_U2 = sub2ind([ny,nx], iiU2, jj);
-idx_D2 = sub2ind([ny,nx], iiD2, jj);
-
-idx_UR = sub2ind([ny,nx], iiUR, jjUR);
-idx_DR = sub2ind([ny,nx], iiDR, jjDR);
-idx_UL = sub2ind([ny,nx], iiUL, jjUL);
-idx_DL = sub2ind([ny,nx], iiDL, jjDL);
+idx_c = sub2ind([ny,nx], ii,  jj);
+idx_L = sub2ind([ny,nx], ii,  jjL);
+idx_R = sub2ind([ny,nx], ii,  jjR);
+idx_U = sub2ind([ny,nx], iiU, jj);
+idx_D = sub2ind([ny,nx], iiD, jj);
 
 % ------------------------------------------------------------
-% Active phi mask: solve only around interfaces
+% Active phi mask
 % ------------------------------------------------------------
 if isfield(NUM,'phi_mask_cut')
     phi_cut = NUM.phi_mask_cut;
@@ -145,11 +127,7 @@ end
 if isfield(NUM,'phi_mask_thick')
     mask_thick = NUM.phi_mask_thick;
 else
-    if isfield(PHYS,'kappa') && PHYS.kappa ~= 0
-        mask_thick = 2;
-    else
-        mask_thick = 1;
-    end
+    mask_thick = 1;
 end
 
 maskPhi = Local_Calc_Interface_Mask(phi_ref,phi_cut,pure_cut,mask_thick);
@@ -163,7 +141,6 @@ if isfield(NUM,'phi_mask_source_tol') && ~isempty(NUM.phi_mask_source_tol)
         mask_source = Local_Dilate_Mask(core_source,mask_thick);
         maskPhi(:,:,alpha) = maskPhi(:,:,alpha) | mask_source;
     end
-
 end
 
 maskPhi = logical(maskPhi);
@@ -171,10 +148,6 @@ active_per_cell = sum(maskPhi,3);
 
 % ------------------------------------------------------------
 % Optional real diagonal AC source Jacobian
-%
-% Jphi_diag{alpha} = dS_alpha/dphi_alpha, with mu/omega frozen.
-% This is different from A_ac: it is the true local source tangent.
-% In the AC row it enters as -Jphi_diag*dphi.
 % ------------------------------------------------------------
 if isfield(NUM,'use_Jphi') && NUM.use_Jphi == 1
     Jphi_diag = Calc_Jphi_Diag_FD(STATE_SRC,PARAM,MODEL,NUM,maskPhi);
@@ -199,28 +172,23 @@ for alpha = 1:Ngrain
 
     idPhiMap{alpha} = idmap;
     counter = counter + nids;
-
 end
 
 Nphi = counter;
-Nmu  = Ne*Nnode;
-Ntot = Nphi + Nmu;
+NEunk = Ne*Nnode;
+Ntot = Nphi + NEunk;
 
-idMu = cell(1,Ne);
+idE = cell(1,Ne);
 
-for l = 1:Ne
-    idMu{l} = Nphi + ((l-1)*Nnode + (1:Nnode)).';
+for ie = 1:Ne
+    idE{ie} = Nphi + ((ie-1)*Nnode + (1:Nnode)).';
 end
 
 % ------------------------------------------------------------
-% Fast grain-aware tangent ingredients
+% Grain-aware tangent ingredients B_ie_alpha
 %
-% For p_i = phi_i^2 / sum_j phi_j^2:
-%
-%   sum_i e_i * dp_i/dphi_alpha
-%     = 2*phi_alpha/D * (e_alpha - sum_i p_i e_i)
-%
-% This avoids building dpdphi{alpha,ip}.
+% B_ie_alpha = sum_i e_i * dp_i/dphi_alpha
+%            = 2*phi_alpha/Dphi * (e_alpha - e_bar)
 % ------------------------------------------------------------
 eps_phi = 1e-14;
 Dphi    = sum(phi_ref.^2,3) + eps_phi;
@@ -239,20 +207,26 @@ for ie = 1:Ne
     tmp = zeros(ny,nx);
 
     for ig = 1:Ngrain
-        tmp = tmp + p_tan(:,:,ig) .* e0{ig}{ie};
+        tmp = tmp + p_tan(:,:,ig).*e0{ig}{ie};
     end
 
     e_bar{ie} = tmp;
+end
 
+B = cell(Ne,Ngrain);
+
+for ie = 1:Ne
+    for alpha = 1:Ngrain
+        B{ie,alpha} = facPhi{alpha} .* (e0{alpha}{ie} - e_bar{ie});
+    end
 end
 
 % ------------------------------------------------------------
 % Sparse matrix allocation
 % ------------------------------------------------------------
 max_nnz = ...
-    Nphi * (6 + Ne) + ...
-    Nnode * Ne * (5 + 13*Ne) + ...
-    13 * Ne * max(Nphi,1) + ...
+    Nphi * (6 + Ne + Ngrain) + ...
+    Nnode * Ne * (5*Ne + 5*Ngrain + 1) + ...
     1000;
 
 rows = zeros(max_nnz,1);
@@ -280,8 +254,8 @@ for alpha = 1:Ngrain
 
     lap_phi_ref = laplacian_reflect(phi_a,dx,dy);
 
-    rhs_full = PARAM.LK .* lap_phi_ref + S_AC{alpha};
-    R(row) = rhs_full(idx_a);
+    rhs_full = PARAM.LK.*lap_phi_ref + S_AC{alpha};
+    R(row)   = rhs_full(idx_a);
 
     LKc = PARAM.LK(idx_a);
     Aac = PARAM.A_ac(idx_a);
@@ -303,43 +277,73 @@ for alpha = 1:Ngrain
     [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idPhiMap{alpha},idxa_U,cU);
     [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idPhiMap{alpha},idxa_D,cD);
 
-    % Real diagonal phi-Jacobian of AC source:
-    %   S_alpha(phi+dphi) ~= S_alpha + Jphi*dphi
-    % Move to left:
-    %   -Jphi*dphi
     if ~isempty(Jphi_diag)
         Jaa = Jphi_diag{alpha};
         [rows,cols,vals,k] = add_active_block( ...
             rows,cols,vals,k,row,idPhiMap{alpha},idx_a,-Jaa(idx_a));
     end
 
-    % Coupling to dmu:
-    % coeff_mu = -L * sum_i e_i * dp_i/dphi_alpha
-    for ie = 1:Ne
+    % --------------------------------------------------------
+    % Substitute dmu = xi*(dE - B*dphi) into AC coupling:
+    %
+    % old AC coupling:
+    %   sum_i (-L*B_i_alpha) * dmu_i
+    %
+    % new dE coupling:
+    %   sum_i,m (-L*B_i_alpha*xi_i_m) * dE_m
+    %
+    % new dphi coupling:
+    %   -sum_i,m,beta (-L*B_i_alpha*xi_i_m*B_m_beta) * dphi_beta
+    % --------------------------------------------------------
 
-        B_ie_alpha = facPhi{alpha} .* (e0{alpha}{ie} - e_bar{ie});
-        coeff_mu   = -PARAM.L .* B_ie_alpha;
+    % Coupling to dE
+    for m = 1:Ne
+
+        coeff_E = zeros(ny,nx);
+
+        for ie = 1:Ne
+            coeff_E = coeff_E - PARAM.L .* B{ie,alpha} .* xi0{ie,m};
+        end
 
         [rows,cols,vals,k] = add_block( ...
-            rows,cols,vals,k,row,idMu{ie}(idx_a),coeff_mu(idx_a));
-
+            rows,cols,vals,k,row,idE{m}(idx_a),coeff_E(idx_a));
     end
 
+    % Extra local dphi coupling from dmu(dphi)
+    for beta = 1:Ngrain
+
+        idmap_beta = idPhiMap{beta};
+
+        if ~any(idmap_beta(:))
+            continue
+        end
+
+        coeff_phi = zeros(ny,nx);
+
+        for ie = 1:Ne
+            for m = 1:Ne
+                coeff_phi = coeff_phi + PARAM.L .* B{ie,alpha} .* xi0{ie,m} .* B{m,beta};
+            end
+        end
+
+        [rows,cols,vals,k] = add_active_block( ...
+            rows,cols,vals,k,row,idmap_beta,idx_a,coeff_phi(idx_a));
+    end
 end
 
 % ============================================================
-% 2. Cahn-Hilliard block with implicit LE closure
+% 2. Cahn-Hilliard block, E-primary, kappa = 0
 % ============================================================
 for l = 1:Ne
 
-    row = idMu{l}(idx_c);
+    row = idE{l}(idx_c);
 
-    Ml   = PARAM.M{l};
-    M_c  = Ml(idx_c);
-    M_L  = Ml(idx_L);
-    M_R  = Ml(idx_R);
-    M_U  = Ml(idx_U);
-    M_D  = Ml(idx_D);
+    Ml  = PARAM.M{l};
+    M_c = Ml(idx_c);
+    M_L = Ml(idx_L);
+    M_R = Ml(idx_R);
+    M_U = Ml(idx_U);
+    M_D = Ml(idx_D);
 
     d_L = -(M_L + M_c)/2/dx2;
     d_R = -(M_R + M_c)/2/dx2;
@@ -347,61 +351,7 @@ for l = 1:Ne
     d_D = -(M_D + M_c)/2/dy2;
     d_C = -(d_L + d_R + d_U + d_D);
 
-    % --------------------------------------------------------
-    % A_E operator on E:
-    % --------------------------------------------------------
-    kappa_c = kappa_eff(idx_c);
-    MK_c    = M_c .* kappa_c;
-
-    q_L  = MK_c .* (-4/dx4 - 4/(dx2*dy2));
-    q_R  = MK_c .* (-4/dx4 - 4/(dx2*dy2));
-    q_U  = MK_c .* (-4/dy4 - 4/(dx2*dy2));
-    q_D  = MK_c .* (-4/dy4 - 4/(dx2*dy2));
-
-    q_L2 = MK_c .* (1/dx4);
-    q_R2 = MK_c .* (1/dx4);
-    q_U2 = MK_c .* (1/dy4);
-    q_D2 = MK_c .* (1/dy4);
-
-    q_UR = MK_c .* (2/(dx2*dy2));
-    q_DR = MK_c .* (2/(dx2*dy2));
-    q_UL = MK_c .* (2/(dx2*dy2));
-    q_DL = MK_c .* (2/(dx2*dy2));
-
-    q_C  = MK_c .* (6/dx4 + 6/dy4 + 8/(dx2*dy2));
-
-    a_C  = 1/dt + q_C;
-    a_L  = q_L;
-    a_R  = q_R;
-    a_U  = q_U;
-    a_D  = q_D;
-
-    a_L2 = q_L2;
-    a_R2 = q_R2;
-    a_U2 = q_U2;
-    a_D2 = q_D2;
-
-    a_UR = q_UR;
-    a_DR = q_DR;
-    a_UL = q_UL;
-    a_DL = q_DL;
-
-    E_l  = E_ref{l};
     mu_l = mu_ref{l};
-
-    E_c  = E_l(idx_c);
-    E_L  = E_l(idx_L);
-    E_R  = E_l(idx_R);
-    E_U  = E_l(idx_U);
-    E_D  = E_l(idx_D);
-    E_L2 = E_l(idx_L2);
-    E_R2 = E_l(idx_R2);
-    E_U2 = E_l(idx_U2);
-    E_D2 = E_l(idx_D2);
-    E_UR = E_l(idx_UR);
-    E_DR = E_l(idx_DR);
-    E_UL = E_l(idx_UL);
-    E_DL = E_l(idx_DL);
 
     mu_c = mu_l(idx_c);
     mu_L = mu_l(idx_L);
@@ -409,113 +359,64 @@ for l = 1:Ne
     mu_U = mu_l(idx_U);
     mu_D = mu_l(idx_D);
 
-    AE_Eref = ...
-        a_C  .* E_c  + ...
-        a_L  .* E_L  + a_R  .* E_R  + a_U  .* E_U  + a_D  .* E_D  + ...
-        a_L2 .* E_L2 + a_R2 .* E_R2 + a_U2 .* E_U2 + a_D2 .* E_D2 + ...
-        a_UR .* E_UR + a_DR .* E_DR + a_UL .* E_UL + a_DL .* E_DL;
+    D_muref = d_C.*mu_c + d_L.*mu_L + d_R.*mu_R + d_U.*mu_U + d_D.*mu_D;
 
-    D_muref = ...
-        d_C .* mu_c + d_L .* mu_L + d_R .* mu_R + d_U .* mu_U + d_D .* mu_D;
+    % Increment equation:
+    %   dE_l/dt + D*dmu_l = -D*mu_ref_l
+    R(row) = -D_muref;
 
-    R(row) = E_c/dt - AE_Eref - D_muref;
+    % dE_l / dt
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idE{l}(idx_c),ones(Nnode,1)/dt);
 
-    % Diffusion block on dmu_l
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_c),d_C);
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_L),d_L);
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_R),d_R);
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_U),d_U);
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_D),d_D);
-
-    % A_E * chi * dmu
+    % D * xi * dE
     for m = 1:Ne
 
-        Chi_lm = chi0{l,m};
+        Xi_lm = xi0{l,m};
 
-        Chi_c  = Chi_lm(idx_c);
-        Chi_L  = Chi_lm(idx_L);
-        Chi_R  = Chi_lm(idx_R);
-        Chi_U  = Chi_lm(idx_U);
-        Chi_D  = Chi_lm(idx_D);
+        Xi_c = Xi_lm(idx_c);
+        Xi_L = Xi_lm(idx_L);
+        Xi_R = Xi_lm(idx_R);
+        Xi_U = Xi_lm(idx_U);
+        Xi_D = Xi_lm(idx_D);
 
-        Chi_L2 = Chi_lm(idx_L2);
-        Chi_R2 = Chi_lm(idx_R2);
-        Chi_U2 = Chi_lm(idx_U2);
-        Chi_D2 = Chi_lm(idx_D2);
-
-        Chi_UR = Chi_lm(idx_UR);
-        Chi_DR = Chi_lm(idx_DR);
-        Chi_UL = Chi_lm(idx_UL);
-        Chi_DL = Chi_lm(idx_DL);
-
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_c),  a_C  .* Chi_c);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L),  a_L  .* Chi_L);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R),  a_R  .* Chi_R);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U),  a_U  .* Chi_U);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D),  a_D  .* Chi_D);
-
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L2), a_L2 .* Chi_L2);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R2), a_R2 .* Chi_R2);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U2), a_U2 .* Chi_U2);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D2), a_D2 .* Chi_D2);
-
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_UR), a_UR .* Chi_UR);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_DR), a_DR .* Chi_DR);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_UL), a_UL .* Chi_UL);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_DL), a_DL .* Chi_DL);
-
+        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idE{m}(idx_c),d_C.*Xi_c);
+        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idE{m}(idx_L),d_L.*Xi_L);
+        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idE{m}(idx_R),d_R.*Xi_R);
+        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idE{m}(idx_U),d_U.*Xi_U);
+        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idE{m}(idx_D),d_D.*Xi_D);
     end
 
-    % A_E * B * dphi
-    for alpha = 1:Ngrain
+    % -D * xi * B * dphi
+    for beta = 1:Ngrain
 
-        idmap = idPhiMap{alpha};
+        idmap_beta = idPhiMap{beta};
 
-        % If this grain has no active dphi, skip immediately.
-        if Nphi > 0 && ~any(idmap(:))
+        if ~any(idmap_beta(:))
             continue
         end
 
-        B_la = facPhi{alpha} .* (e0{alpha}{l} - e_bar{l});
+        C_lb = zeros(ny,nx);
 
-        B_c  = B_la(idx_c);
-        B_L  = B_la(idx_L);
-        B_R  = B_la(idx_R);
-        B_U  = B_la(idx_U);
-        B_D  = B_la(idx_D);
+        for m = 1:Ne
+            C_lb = C_lb + xi0{l,m} .* B{m,beta};
+        end
 
-        B_L2 = B_la(idx_L2);
-        B_R2 = B_la(idx_R2);
-        B_U2 = B_la(idx_U2);
-        B_D2 = B_la(idx_D2);
+        C_c = C_lb(idx_c);
+        C_L = C_lb(idx_L);
+        C_R = C_lb(idx_R);
+        C_U = C_lb(idx_U);
+        C_D = C_lb(idx_D);
 
-        B_UR = B_la(idx_UR);
-        B_DR = B_la(idx_DR);
-        B_UL = B_la(idx_UL);
-        B_DL = B_la(idx_DL);
-
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_c,  a_C  .* B_c);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_L,  a_L  .* B_L);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_R,  a_R  .* B_R);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_U,  a_U  .* B_U);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_D,  a_D  .* B_D);
-
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_L2, a_L2 .* B_L2);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_R2, a_R2 .* B_R2);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_U2, a_U2 .* B_U2);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_D2, a_D2 .* B_D2);
-
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_UR, a_UR .* B_UR);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_DR, a_DR .* B_DR);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_UL, a_UL .* B_UL);
-        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap,idx_DL, a_DL .* B_DL);
-
+        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap_beta,idx_c,-d_C.*C_c);
+        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap_beta,idx_L,-d_L.*C_L);
+        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap_beta,idx_R,-d_R.*C_R);
+        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap_beta,idx_U,-d_U.*C_U);
+        [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idmap_beta,idx_D,-d_D.*C_D);
     end
-
 end
 
 % ------------------------------------------------------------
-% Assemble
+% Assemble and solve
 % ------------------------------------------------------------
 rows = rows(1:k-1);
 cols = cols(1:k-1);
@@ -523,10 +424,6 @@ vals = vals(1:k-1);
 
 A = sparse(rows,cols,vals,Ntot,Ntot);
 
-
-% ------------------------------------------------------------
-% Solve: sparse direct solve with COLAMD column ordering
-% ------------------------------------------------------------
 q = colamd(A);
 y = A(:,q) \ R;
 
@@ -538,7 +435,7 @@ relres = norm(A*sol - R)/max(norm(R),eps);
 iter   = [0 0];
 
 % ------------------------------------------------------------
-% Unpack dphi and dmu
+% Unpack dphi and dE
 % ------------------------------------------------------------
 dphi = zeros(ny,nx,Ngrain);
 
@@ -556,17 +453,16 @@ for alpha = 1:Ngrain
     end
 
     dphi(:,:,alpha) = tmp;
-
 end
 
-dmu = cell(1,Ne);
+dE = cell(1,Ne);
 
 for ie = 1:Ne
-    dmu{ie} = reshape(sol(idMu{ie}),ny,nx);
+    dE{ie} = reshape(sol(idE{ie}),ny,nx);
 end
 
 % ------------------------------------------------------------
-% Update phi and p from fixed reference state
+% Update phi and p
 % ------------------------------------------------------------
 STATE_NEW     = STATE_REF;
 STATE_NEW.phi = phi_ref + dphi;
@@ -582,38 +478,56 @@ end
 STATE_NEW.p = Calc_p(MODEL,STATE_NEW.phi);
 
 % ------------------------------------------------------------
-% Update mu from fixed reference state
-% ------------------------------------------------------------
-STATE_NEW.mu_e = mu_ref;
-
-for ie = 1:Ne
-    STATE_NEW.mu_e{ie} = mu_ref{ie} + dmu{ie};
-end
-
-% ------------------------------------------------------------
-% Recover E from LE tangent
+% Update E directly
 % ------------------------------------------------------------
 STATE_NEW.E = E_ref;
 
 for ie = 1:Ne
-
-    En = E_ref{ie};
-
-    for je = 1:Ne
-        En = En + chi0{ie,je} .* dmu{je};
-    end
-
-    for ig = 1:Ngrain
-        dp_ig = STATE_NEW.p(:,:,ig) - p_ref(:,:,ig);
-        En = En + e0{ig}{ie} .* dp_ig;
-    end
-
-    STATE_NEW.E{ie} = En;
-
+    STATE_NEW.E{ie} = E_ref{ie} + dE{ie};
 end
 
 if isfield(NUM,'norm_E') && NUM.norm_E == 1
     STATE_NEW.E = EnforceMeanE_Local(STATE_NEW.E,E_ref);
+end
+
+% ------------------------------------------------------------
+% Recover dmu from tangent:
+%
+%   dmu = xi*(dE - B*dphi)
+%
+% Use the solved dphi, not nonlinear dp.
+% Final LE_Run should overwrite mu_e anyway.
+% ------------------------------------------------------------
+qE = cell(1,Ne);
+
+for m = 1:Ne
+
+    tmp = dE{m};
+
+    for alpha = 1:Ngrain
+        tmp = tmp - B{m,alpha} .* dphi(:,:,alpha);
+    end
+
+    qE{m} = tmp;
+end
+
+dmu = cell(1,Ne);
+
+for ie = 1:Ne
+
+    tmp = zeros(ny,nx);
+
+    for m = 1:Ne
+        tmp = tmp + xi0{ie,m} .* qE{m};
+    end
+
+    dmu{ie} = tmp;
+end
+
+STATE_NEW.mu_e = mu_ref;
+
+for ie = 1:Ne
+    STATE_NEW.mu_e{ie} = mu_ref{ie} + dmu{ie};
 end
 
 % ------------------------------------------------------------
@@ -631,7 +545,6 @@ for ig = 1:Ngrain
     end
 
     STATE_NEW.omg(:,:,ig) = STATE_REF.omg(:,:,ig) + domega;
-
 end
 
 omg_mean = mean(STATE_NEW.omg,3);
@@ -651,70 +564,81 @@ DIAG.relres   = relres;
 DIAG.iter     = iter;
 DIAG.max_dphi = max(abs(dphi(:)));
 
+max_dE = 0;
 max_dmu = 0;
 
 for ie = 1:Ne
+    max_dE  = max(max_dE,max(abs(dE{ie}(:))));
     max_dmu = max(max_dmu,max(abs(dmu{ie}(:))));
 end
 
+DIAG.max_dE           = max_dE;
 DIAG.max_dmu          = max_dmu;
 DIAG.matrix_size      = Ntot;
 DIAG.nnz              = nnz(A);
 DIAG.Nphi_active      = Nphi;
 DIAG.Nphi_full        = Ngrain*Nnode;
-DIAG.Nmu              = Nmu;
+DIAG.NE               = NEunk;
 DIAG.Ngrain           = Ngrain;
 DIAG.Ne               = Ne;
 DIAG.active_phi_ratio = Nphi / max(Ngrain*Nnode,1);
 DIAG.active_cell_mean = mean(active_per_cell(:));
 DIAG.active_cell_max  = max(active_per_cell(:));
-DIAG.kappa_on_frac    = mean(kappa_eff(:) > 0);
-DIAG.kappa_max        = max(kappa_eff(:));
-DIAG.kappa_mean       = mean(kappa_eff(:));
-
-% Fields required by the equation checker
 DIAG.maskPhi          = maskPhi;
 DIAG.use_Jphi         = ~isempty(Jphi_diag);
 
-if ~isempty(Jphi_diag)
+end
 
-    DIAG.Jphi_diag = Jphi_diag;
 
-    max_Jphi = 0;
+function xi = InvertChi_Local(chi,chi_floor)
 
-    for alpha = 1:Ngrain
-        max_Jphi = max(max_Jphi,max(abs(Jphi_diag{alpha}(:))));
+Ne = size(chi,1);
+[ny,nx] = size(chi{1,1});
+N = ny*nx;
+
+xi = cell(Ne,Ne);
+
+for i = 1:Ne
+    for j = 1:Ne
+        xi{i,j} = zeros(ny,nx);
+    end
+end
+
+for id = 1:N
+
+    C = zeros(Ne,Ne);
+
+    for i = 1:Ne
+        for j = 1:Ne
+            tmp = chi{i,j};
+            C(i,j) = tmp(id);
+        end
     end
 
-    DIAG.max_Jphi = max_Jphi;
+    C = 0.5*(C+C.');
 
-else
+    [V,D] = eig(C);
+    lam = diag(D);
 
-    DIAG.Jphi_diag = cell(1,Ngrain);
+    sc = max(1,max(abs(lam)));
+    lam = max(lam,chi_floor*sc);
 
-    for alpha = 1:Ngrain
-        DIAG.Jphi_diag{alpha} = zeros(ny,nx);
+    X = V*diag(1./lam)*V.';
+    X = 0.5*(X+X.');
+
+    for i = 1:Ne
+        for j = 1:Ne
+            tmp = xi{i,j};
+            tmp(id) = X(i,j);
+            xi{i,j} = tmp;
+        end
     end
-
-    DIAG.max_Jphi = 0;
-
 end
 
 end
-
 
 
 function Jdiag = Calc_Jphi_Diag_FD(STATE,PARAM,MODEL,NUM,maskPhi)
-%CALC_JPHI_DIAG_FD
-%
-% Diagonal real AC-source Jacobian:
-%
-%   Jdiag{alpha} = dS_alpha/dphi_alpha
-%
-% omega/mu are frozen. This is not a stabilizer. It is the actual local
-% derivative of Calc_S_AllenCahn with respect to the same phi component.
-%
-% The derivative is computed only on active dphi rows.
 
 phi0 = STATE.phi;
 [ny,nx,Ngrain] = size(phi0);
@@ -752,7 +676,6 @@ for alpha = 1:Ngrain
 
     Jtmp = (Sp{alpha} - S0{alpha}) / eps_fd;
     Jdiag{alpha}(mask_a) = Jtmp(mask_a);
-
 end
 
 end
@@ -868,12 +791,15 @@ end
 
 
 function E = EnforceMeanE_Local(E,E_old)
+
 Ne = numel(E);
+
 for ie = 1:Ne
     target_mean = mean(E_old{ie}(:));
     new_mean    = mean(E{ie}(:));
     E{ie}       = E{ie} + target_mean - new_mean;
 end
+
 end
 
 
@@ -891,12 +817,11 @@ phi = max(phi,0);
 phi = min(phi,1);
 
 s = sqrt(sum(phi.^2,3));
-
 mask = s > eps;
 
 for ip = 1:size(phi,3)
     tmp = phi(:,:,ip);
-    tmp(mask) = tmp(mask) ./ s(mask);
+    tmp(mask) = tmp(mask)./s(mask);
     phi(:,:,ip) = tmp;
 end
 
@@ -941,7 +866,6 @@ for alpha = 1:Ngrain
     core = core | jump;
 
     mask(:,:,alpha) = Local_Dilate_Mask(core,thickness);
-
 end
 
 end

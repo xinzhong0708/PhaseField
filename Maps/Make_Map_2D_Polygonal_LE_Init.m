@@ -13,20 +13,20 @@ addpath('..\ThermoData')
 %  User controls
 % ========================================================================
 
-map_mode = 'polygon';     % 'bands' or 'polygon'
+map_mode = 'bands';     % 'bands' or 'polygon'
 
 % Thermodynamic phases
 phs_name = {'Grt','Cpx','Fel','Olv'};
 
 % Requested phase proportions
-phase_prop = [0.30 0.20 0.20 0.30];
+phase_prop = [0.25 0.35 0.20 0.20];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions
 c_value = cell(1,numel(phs_name));
 c_value{1} = [0.45 0.45];                 % Grt
-c_value{2} = [0.04 0.38 0 0.04 0.4];      % Cpx
-c_value{3} = [0.5];                       % Fel
+c_value{2} = [0.25 0.15 0 0.04 0.4];      % Cpx
+c_value{3} = [0.7];                       % Fel
 c_value{4} = [0.20 0.25 0.35];            % Olv
 
 % Domain
@@ -35,13 +35,11 @@ Ly = 5e-6;
 
 switch lower(map_mode)
     case 'bands'
-        nx = 200;
-        ny = 5;
-
+        nx = 400;
+        ny = 4;
     case 'polygon'
-        nx = 70;
-        ny = 70;
-
+        nx = 80;
+        ny = 80;
     otherwise
         error('Unknown map_mode: %s',map_mode)
 end
@@ -81,8 +79,7 @@ e_guess  = Calc_e(pars_phase,c_guess);
 E_target = Calc_E_Tot(e_guess,p_ref);
 Ne       = numel(E_target);
 
-[c_ref,mu_ref] = LE_Calculator( ...
-    pars_phase,p_ref,c_guess,E_target,eta0,[0.02,2000]);
+[c_ref,mu_ref] = LE_Calculator(pars_phase,p_ref,c_guess,E_target,eta0,[0.1,2000]);
 
 e_ref     = Calc_e(pars_phase,c_ref);
 E_mix_ref = Calc_E_Tot(e_ref,p_ref);
@@ -331,7 +328,7 @@ STATE.LE_state = [];
 STATE_INI = STATE;
 
 PARAM.LE_mode = 'LE';
-STATE = LE_Run_Mode(STATE,PARAM,MODEL);
+STATE         =  LE_Run_Mode_New(STATE,PARAM,MODEL);
 
 p_phase        = Collapse_p_By_Phase(STATE.p,MODEL.phase_index,Nphase);
 phase_prop_map = zeros(1,Nphase);
