@@ -16,18 +16,18 @@ addpath('..\ThermoData')
 map_mode = 'bands';     % 'bands' or 'polygon'
 
 % Thermodynamic phases
-phs_name = {'Grt','Cpx','Fel','Olv'};
+phs_name = {'Grt','Cpx','Olv'};
 
 % Requested phase proportions
-phase_prop = [0.25 0.35 0.20 0.20];
+phase_prop = [0.4 0.4 0.3];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions
 c_value = cell(1,numel(phs_name));
 c_value{1} = [0.45 0.45];                 % Grt
-c_value{2} = [0.25 0.15 0 0.04 0.4];      % Cpx
-c_value{3} = [0.7];                       % Fel
-c_value{4} = [0.20 0.25 0.35];            % Olv
+c_value{2} = [0.05 0.15 0 0.04 0.4];      % Cpx
+% c_value{3} = [0.9];                       % Fel
+c_value{3} = [0.05 0.25 0.35];            % Olv
 
 % Domain
 Lx = 5e-6;
@@ -35,7 +35,7 @@ Ly = 5e-6;
 
 switch lower(map_mode)
     case 'bands'
-        nx = 400;
+        nx = 200;
         ny = 4;
     case 'polygon'
         nx = 80;

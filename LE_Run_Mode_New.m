@@ -8,10 +8,10 @@ function [STATE] = LE_Run_Mode_New(STATE,PARAM,MODEL)
 mode       =  PARAM.LE_mode;
 
 %p mode on and off
-p_tail     =  1e-4;
-p_full     =  1e-2;
-p_on       =  1e-3;
-p_off      =  5e-4;
+p_tail     =  0.9*5e-4;
+p_full     =  0.9*2e-2;
+p_on       =  0.9*6e-3;
+p_off      =  0.9*3e-3;
 
 %Maximal number of active phases for LE/GP
 Pmax       =  3;
@@ -131,7 +131,7 @@ for iset = 1:size(active_sets,1)
 
         %For one phase, use LE because E is the conserved variable.
         %For multiphase regions, use mass-consistent GP as smooth closure.
-        if k == 1
+        if k == 0
             mm                     =  iter_LE(kk);
             [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
         else
