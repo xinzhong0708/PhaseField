@@ -8,10 +8,10 @@ function [STATE] = LE_Run_Mode_New(STATE,PARAM,MODEL)
 mode       =  PARAM.LE_mode;
 
 %p mode on and off
-p_tail     =  0.9*5e-4;
-p_full     =  0.9*2e-2;
-p_on       =  0.9*6e-3;
-p_off      =  0.9*3e-3;
+p_tail     =  5e-4;
+p_full     =  2e-2;
+p_on       =  6e-3;
+p_off      =  3e-3;
 
 %Maximal number of active phases for LE/GP
 Pmax       =  3;

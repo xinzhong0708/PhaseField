@@ -1,5 +1,5 @@
 %Clear and restart
-clear;figure(1);clf;addpath('bin');addpath('ThermoData');addpath('Thermo');addpath('Maps');addpath('Thermo\Solutions')
+clear;figure(3);clf;addpath('bin');addpath('ThermoData');addpath('Thermo');addpath('Maps');addpath('Thermo\Solutions')
 
 load Map2d.mat
 rng(1)
@@ -102,6 +102,20 @@ disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(
 % NUM.int_damp       =  0.4;
 % NUM.use_order_cache= 1;
 
+
+% Coarse global CH
+NUM.CH_coarse_ratio          = 4;
+NUM.CH_coarse_kappac         = 0;
+NUM.CH_bg_theta              = 1.0;
+NUM.CH_bg_mean_correct       = 0;
+
+% Fine local ACCH correction
+NUM.ACCH_band_width          = 12;     % main free parameter
+NUM.ACCH_p_cut               = 1e-8;
+NUM.ACCH_include_kappa_mask  = 1;
+NUM.ACCH_fine_use_kappa_c    = 0;      % local kappa_c not implemented yet
+
+
 for it = 1:1000
     if mod(it,50)==0
         save(num2str(it))
@@ -110,26 +124,26 @@ for it = 1:1000
     tic
 
 
-    % DIRECT COUPLED SOLVER WITH MU-MATCHED E RECOVERY
+    % DIRECT COUPLED SOLVER WITH COARSE CH + LOCAL ACCH CORRECTION
     STATE_OLD            =    STATE;
 
     % DAMPED ETA
     PARAM.eta            =    Eta_Damping(STATE_OLD.p,PHYS.eta,NUM.int_damp*PHYS.eta);
 
     % Old-state local equilibrium
-    PARAM.LE_mode        =   'LE';
+    PARAM.LE_mode        =    'LE';
     STATE_OLD            =    LE_Run_Mode_New(STATE_OLD,PARAM,MODEL);
     STATE_OLD            =    Extend_AbsentPhaseC_Rim(STATE_OLD,PARAM);
 
-    % Full AC + CH coupled predictor
-    STATE_RAW            =    PF_Coupled_ACCH_LETangent_CS(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
+    % Coarse global CH + fine local ACCH correction
+    [STATE_RAW,DIAG_RAW] =    PF_Coupled_ACCH_CoarseCH_Band_CS(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
 
-    % Re-run fixed-E LE on corrected E
+    % Re-run fixed-E LE
     STATE_LE0            =    LE_Run_Mode_New(STATE_RAW,PARAM,MODEL);
     STATE_LE0            =    Extend_AbsentPhaseC_Rim(STATE_LE0,PARAM);
 
-    % Fixed-p chemical corrector
-    STATE_CORR           =    PF_CH_LECorrector_FixedP_Band_CS(STATE_OLD,STATE_LE0,MODEL,PARAM,GRID,PHYS,NUM);
+    % Optional: skip the old corrector first
+    STATE_CORR           =    STATE_LE0;
 
     % Final nonlinear fixed-E state
     STATE_TRIAL          =    LE_Run_Mode_New(STATE_CORR,PARAM,MODEL);
@@ -140,6 +154,7 @@ for it = 1:1000
 
     % UPDATE L
     PARAM                =    Compute_L(STATE,PARAM);
+
 
     % CHECK
     dE{1}                =    STATE_TRIAL.E{1}-STATE.E{1};
@@ -183,23 +198,6 @@ for it = 1:1000
         end
     end
 
-    % if mod(it,2)==0
-    %     disp(NUM.dt_phy)
-    %     disp(PHASE(end,:))
-    %     PF_Plot([3,3,1],'E3',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,6],'omg13',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,7],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     subplot(337);pcolor(GRID.x,GRID.y,dE{1});colorbar;shading interp;axis equal
-    %     subplot(338);pcolor(GRID.x,GRID.y,CHI);colorbar;shading interp;axis equal
-    %     PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     drawnow
-    % end
-
-
     if mod(it,2)==0
         disp(NUM.dt_phy)
         disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') ])
@@ -218,16 +216,6 @@ for it = 1:1000
         subplot(338);plot(TIME,PHASE);
         drawnow
     end
-
-    % if mod(it,2)==0
-    %     disp(NUM.dt_phy)
-    %     disp(PHASE(end,:))
-    %     PF_Plot([2,2,1],'E1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([2,2,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([2,2,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     subplot(224);pcolor(GRID.x,GRID.y,CHI);colorbar;shading interp;axis equal
-    %     drawnow
-    % end
 
 end
 

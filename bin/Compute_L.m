@@ -16,7 +16,7 @@ Ne         = numel(STATE.E);
 % Parameters
 % ------------------------------------------------------------
 L_fac   = 1.0;
-p_cut   = 1e-4;
+p_cut   = 1e-6;
 M_min   = 1e-30;
 z_min   = 1e-30;
 ngrow   = 2;

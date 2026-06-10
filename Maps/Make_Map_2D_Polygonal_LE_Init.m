@@ -36,7 +36,7 @@ Ly = 5e-6;
 switch lower(map_mode)
     case 'bands'
         nx = 200;
-        ny = 4;
+        ny = 16;
     case 'polygon'
         nx = 80;
         ny = 80;
