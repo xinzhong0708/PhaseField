@@ -28,14 +28,14 @@ PHYS.L             =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0);
 PHYS.eta           =  eta;
 
 %NUMERICS
-NUM.dt_phy         =   1e-4/PHYS.t_sc;
+NUM.dt_phy         =   1e-5/PHYS.t_sc;
 NUM.dt_max         =    1e1/PHYS.t_sc;
 NUM.dt_min         =  1e-16/PHYS.t_sc; 
 NUM.t_tot          =    1e5/PHYS.t_sc;
-NUM.dE_target      =  1e-2;
-NUM.dp_target      =  1e-2;
-NUM.dmu_target     =  1e2;
 NUM.time           =  0;
+NUM.dE_target      =  2e-2;
+NUM.dp_target      =  2e-2;
+NUM.dmu_target     =  1e2;
 NUM.dt_good_count  =  0;
 NUM.dt_grow_after  =  8;
 NUM.dt_grow_fac    =  1.15;
@@ -43,15 +43,24 @@ NUM.dt_shrink_fac  =  0.5;
 NUM.err_grow       =  0.25;
 NUM.phi_mask_cut   =  1e-8;
 NUM.phi_mask_thick =  2;
+NUM.use_Jphi       =  1;
 NUM.norm_phi       =  1;
 NUM.cut_phi        =  0;
 NUM.norm_E         =  1;
-NUM.int_damp       =  0.1;
+NUM.int_damp       =  0.2;
 NUM.kappa_p_cut    =  1e-6;
-NUM.use_Jphi       =  1;
-NUM.CHLE_p_cut     =  1e-8;
-NUM.CHLE_band_thick=  16;
-NUM.CHLE_res_rel   =  [];
+
+% Coarse global CH
+NUM.CH_coarse_ratio          = 1;
+NUM.CH_coarse_kappac         = 0;
+NUM.CH_bg_theta              = 1.0;
+NUM.CH_bg_mean_correct       = 0;
+
+% Fine local ACCH correction
+NUM.ACCH_band_width          = 250;     % main free parameter
+NUM.ACCH_p_cut               = 1e-8;
+NUM.ACCH_include_kappa_mask  = 1;
+NUM.ACCH_fine_use_kappa_c    = 0;      % local kappa_c not implemented yet
 
 %GRIDS
 GRID.dx            =  GRID.dx/PHYS.L_sc;
@@ -79,7 +88,7 @@ PARAM.use_CS_chi   =  1;
 PARAM.CS_chi_floor =  1e-9;
 PARAM.CS_chi_cap   =  1e-2;
 PARAM.use_kappa_c  =  1; 
-PARAM.L_fac        =  0.1;
+PARAM.L_fac        =  0.2;
 
 %STATES
 STATE.c            =  STATE.c;
@@ -95,26 +104,6 @@ STATE.LE_state     = [   ];
 
 %DISPLAY COMPOSITION
 disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{4},'all') mean(STATE.E{end},'all')])
-
-% load 2500
-% NUM.dE_target      =  2e-2;
-% NUM.dp_target      =  2e-2;
-% NUM.int_damp       =  0.4;
-% NUM.use_order_cache= 1;
-
-
-% Coarse global CH
-NUM.CH_coarse_ratio          = 4;
-NUM.CH_coarse_kappac         = 0;
-NUM.CH_bg_theta              = 1.0;
-NUM.CH_bg_mean_correct       = 0;
-
-% Fine local ACCH correction
-NUM.ACCH_band_width          = 12;     % main free parameter
-NUM.ACCH_p_cut               = 1e-8;
-NUM.ACCH_include_kappa_mask  = 1;
-NUM.ACCH_fine_use_kappa_c    = 0;      % local kappa_c not implemented yet
-
 
 for it = 1:1000
     if mod(it,50)==0
@@ -142,19 +131,14 @@ for it = 1:1000
     STATE_LE0            =    LE_Run_Mode_New(STATE_RAW,PARAM,MODEL);
     STATE_LE0            =    Extend_AbsentPhaseC_Rim(STATE_LE0,PARAM);
 
-    % Optional: skip the old corrector first
-    STATE_CORR           =    STATE_LE0;
-
-    % Final nonlinear fixed-E state
-    STATE_TRIAL          =    LE_Run_Mode_New(STATE_CORR,PARAM,MODEL);
-    STATE_TRIAL          =    Extend_AbsentPhaseC_Rim(STATE_TRIAL,PARAM);
+    % No extra corrector
+    STATE_TRIAL          =    STATE_LE0;
 
     % TIME STEP UPDATE
     [STATE,NUM]          =    Update_TimeStep_Soft(STATE,STATE_TRIAL,PARAM,MODEL,NUM);
 
     % UPDATE L
     PARAM                =    Compute_L(STATE,PARAM);
-
 
     % CHECK
     dE{1}                =    STATE_TRIAL.E{1}-STATE.E{1};

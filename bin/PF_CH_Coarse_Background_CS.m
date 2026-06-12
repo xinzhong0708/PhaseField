@@ -23,7 +23,7 @@ if nargin < 7 || isempty(STATE_COEF)
     STATE_COEF = STATE_REF;
 end
 
-r = 4;
+r = 1;
 if isfield(NUM,'CH_coarse_ratio') && ~isempty(NUM.CH_coarse_ratio)
     r = NUM.CH_coarse_ratio;
 end
@@ -44,8 +44,7 @@ if r == 1
         PARAM_C = PARAM;
     end
 
-    [STATE_C,DIAG_C] = PF_CH_LECorrector_FixedP_Band_CS( ...
-        STATE_REF,STATE_COEF,PARAM_C,MODEL,GRID,PHYS,NUM_C);
+    [STATE_C,DIAG_C] = PF_CH_LECorrector_FixedP_Band_CS(STATE_REF,STATE_COEF,PARAM_C,MODEL,GRID,PHYS,NUM_C);
 
     STATE_BG = STATE_C;
     DIAG.coarse = DIAG_C;
@@ -72,8 +71,7 @@ NUM_C = NUM;
 NUM_C.CHLE_force_full = 1;
 NUM_C.CHLE_res_rel    = 0;
 
-[STATE_C_CORR,DIAG_C] = PF_CH_LECorrector_FixedP_Band_CS( ...
-    STATE_TIME_C,STATE_IT_C,PARAM_C,MODEL,GRID_C,PHYS,NUM_C);
+[STATE_C_CORR,DIAG_C] = PF_CH_LECorrector_FixedP_Band_CS(STATE_TIME_C,STATE_IT_C,PARAM_C,MODEL,GRID_C,PHYS,NUM_C);
 
 % ------------------------------------------------------------
 % Prolong only the coarse dmu correction to fine grid
@@ -374,8 +372,7 @@ end
 
 [xc,yc] = meshgrid(linspace(1,nx,nxc),linspace(1,ny,nyc));
 [xf,yf] = meshgrid(1:nx,1:ny);
-
-F = interp2(xc,yc,C,xf,yf,'linear');
+F       = interp2(xc,yc,C,xf,yf,'linear');
 
 if any(isnan(F(:)))
     Fn = interp2(xc,yc,C,xf,yf,'nearest');

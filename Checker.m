@@ -1,21 +1,25 @@
 clear; clf; colormap(jet(256))
-
+% 
 %Load data
-load temp
+load 80
 
 %% Solve it with the solver
 NUM.norm_phi       =  0;
 NUM.cut_phi        =  0;
 NUM.norm_E         =  0;
-NUM.use_Jphi       =  1;
+NUM.use_Jphi       =  0;
 STATE_OLD          =  STATE;
 Ne                 =  numel(STATE_OLD.E);
-PARAM.kappa_eff(:) =  mean(PARAM.kappa_eff(:),'all');
+PARAM.kappa_eff    =  zeros(GRID.ny,GRID.nx);
 
 NUM.use_mu_band     = 1;
-NUM.mu_band_thick   = 8;
+NUM.mu_band_thick   = 15;
 NUM.mu_p_cut        = 1e-8;
 NUM.use_order_cache = 1;
+NUM.phi_mask_thick  = 5;
+
+NUM.linear_tol     =  1e-12;
+
 tic
 [STATE,DIAG]        = PF_Coupled_ACCH_LETangent_CS(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
 toc
@@ -23,7 +27,7 @@ toc
 
 
 %% 1) AC CHECK
-alpha        = 3;
+alpha        = 2;
 dt           = NUM.dt_phy;
 dx           = GRID.dx;
 dy           = GRID.dy;

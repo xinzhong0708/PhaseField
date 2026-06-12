@@ -13,26 +13,22 @@ addpath('..\ThermoData')
 %  User controls
 % ========================================================================
 
-map_mode = 'bands';     % 'bands' or 'polygon'
+map_mode = 'polygon';     % 'bands' or 'polygon'
 
 % Thermodynamic phases
-phs_name = {'Grt','Cpx','Olv','Qtz','Fel'};
-phs_name = {'Grt','Grt','Grt'};
+phs_name = {'Grt','Cpx','Olv','Fel','Qtz'};
 
 % Requested phase proportions
-phase_prop = [0.3 0.3 0.2 0.2 0.1];
-phase_prop = [0.3 0.3 0.2 ];
+phase_prop = [0.001 0.3 0.2 0.2 0.1];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions
 c_value = cell(1,numel(phs_name));
 c_value{1} = [0.45 0.45];                 % Grt
-c_value{2} = [0.45 0.45];                 % Grt
-c_value{3} = [0.45 0.45];                 % Grt
-% c_value{2} = [0.05 0.15 0 0.04 0.4];      % Cpx
-% c_value{3} = [0.05 0.25 0.35];            % Olv
-% c_value{5} = [0.5];                       % Fel
-% c_value{4} = [1.0];                       % Qtz
+c_value{2} = [0.05 0.15 0 0.04 0.4];      % Cpx
+c_value{3} = [0.01 0.45 0.45];            % Olv
+c_value{4} = [0.5];                       % Fel
+c_value{5} = [1.0];                       % Qtz
 
 % Domain
 Lx = 5e-6;
@@ -43,17 +39,28 @@ switch lower(map_mode)
         nx = 250;
         ny = 4;
     case 'polygon'
-        nx = 100;
-        ny = 100;
+        nx = 80;
+        ny = 80;
     otherwise
         error('Unknown map_mode: %s',map_mode)
 end
 
 % Polygon controls
-grain_size   = 5.0e-6;    % mean equivalent-circle diameter, meter
+grain_size   = 1.5e-6;    % mean equivalent-circle diameter, meter
 Ngrain_user  = [];        % [] means estimate from grain_size
-rng_seed     = 5;
+rng_seed     = 2;
 periodic_map = 0;         % keep 0 unless the PF solver is periodic
+
+% Central seed controls, polygon mode only
+use_center_seed  = 1;
+seed_phase_name  = 'Grt';
+seed_radius      = 0.15e-6;   % meter
+seed_center_real = [];        % [] means domain center, or [x y] in meter
+single_seed_only = 1;         % do not assign this seed phase to any other grain
+
+% Phase separation controls, polygon mode only
+separate_same_phase = 1;       % avoid neighbouring grains with the same phase
+phase_sep_weight    = 1000;    % large value makes separation dominate area fit
 
 % Scaling / penalty
 PHYS        = struct();
@@ -62,7 +69,7 @@ PHYS.L_sc   = 1;
 
 E_sc        = PHYS.E_sc;
 L_sc        = PHYS.L_sc;
-eta0        = 5000e10/E_sc;
+eta0        = 4000e10/E_sc;
 
 %% ========================================================================
 %  Load thermodynamics and reference LE
@@ -198,10 +205,95 @@ switch lower(map_mode)
 
         [grain_ID,seed_xy] = Remove_Empty_Grains(grain_ID,seed_xy);
 
+        % Optional central seed grain. The rest of the domain remains a
+        % normal polygonal grain map. The seed is treated as one additional
+        % grain with fixed phase.
+        fixed_grain = [];
+        fixed_phase = [];
+
+        if use_center_seed == 1
+
+            seed_phase = find(strcmp(phs_name,seed_phase_name),1,'first');
+
+            if isempty(seed_phase)
+                error('seed_phase_name %s is not in phs_name.',seed_phase_name)
+            end
+
+            [X,Y] = meshgrid(GRID.x,GRID.y);
+
+            if isempty(seed_center_real)
+                seed_center = [mean(GRID.x),mean(GRID.y)];
+            else
+                seed_center = seed_center_real/L_sc;
+            end
+
+            seed_radius_sc = seed_radius/L_sc;
+            seed_mask      = (X-seed_center(1)).^2 + ...
+                             (Y-seed_center(2)).^2 <= seed_radius_sc^2;
+
+            if ~any(seed_mask(:))
+                error('Central seed contains no grid points. Increase seed_radius.')
+            end
+
+            fixed_grain = size(seed_xy,1) + 1;
+            fixed_phase = seed_phase;
+
+            grain_ID(seed_mask) = fixed_grain;
+            seed_xy(fixed_grain,:) = seed_center;
+
+            fprintf('Central %s seed: radius %.4e m, area fraction %.8f\n', ...
+                seed_phase_name,seed_radius,nnz(seed_mask)/numel(seed_mask))
+        end
+
         Ngrain = size(seed_xy,1);
         Np     = Ngrain;
 
-        [grain_phase,~] = Assign_Grain_Phases_By_Area(grain_ID,phase_prop);
+        phase_prop_assign = phase_prop;
+        forbidden_phase   = [];
+
+        if use_center_seed == 1 && single_seed_only == 1 && ~isempty(fixed_phase)
+
+            seed_frac  = nnz(grain_ID == fixed_grain)/numel(grain_ID);
+            rest_phase = setdiff(1:Nphase,fixed_phase);
+            rest_sum   = sum(phase_prop(rest_phase));
+
+            phase_prop_assign(:) = 0;
+            phase_prop_assign(fixed_phase) = seed_frac;
+
+            if rest_sum > 0
+                phase_prop_assign(rest_phase) = phase_prop(rest_phase)/rest_sum*(1-seed_frac);
+            end
+
+            forbidden_phase = fixed_phase;
+
+            fprintf('Only one %s seed is allowed. Non-seed grains cannot be %s.\n', ...
+                seed_phase_name,seed_phase_name)
+        end
+
+        if separate_same_phase == 1
+
+            [grain_phase,~] = Assign_Grain_Phases_By_Area_Separated( ...
+                grain_ID,phase_prop_assign,fixed_grain,fixed_phase,phase_sep_weight,forbidden_phase);
+
+            same_contact = Count_Same_Phase_Contacts(grain_ID,grain_phase);
+
+            fprintf('Same-phase grain contacts after assignment = %d\n',same_contact)
+
+            if same_contact > 0
+                warning(['Some same-phase grain contacts remain. ', ...
+                    'Use smaller grain_size or larger Ngrain_user if strict separation is required.'])
+            end
+
+        elseif use_center_seed == 1
+
+            [grain_phase,~] = Assign_Grain_Phases_By_Area_FixedSeed( ...
+                grain_ID,phase_prop_assign,fixed_grain,fixed_phase,forbidden_phase);
+
+        else
+
+            [grain_phase,~] = Assign_Grain_Phases_By_Area(grain_ID,phase_prop);
+
+        end
 
         phi      = zeros(ny,nx,Ngrain);
         phase_ID = zeros(ny,nx);
@@ -409,9 +501,11 @@ chi  = STATE.chi;
 save('Map2d.mat', ...
     'PHYS','GRID','MODEL','PARAM','STATE', ...
     'E_sc','L_sc','eta','pars','Np','Ne','Nphase','Ngrain', ...
-    'phs_name','phase_prop','phase_prop_geom', ...
+    'phs_name','phase_prop','phase_prop_geom','phase_prop_map', ...
     'map_mode','grain_ID','phase_ID','grain_phase','seed_xy', ...
     'grain_size','grain_size_real','Ngrain_user','rng_seed','periodic_map', ...
+    'use_center_seed','seed_phase_name','seed_radius','seed_center_real','single_seed_only', ...
+    'separate_same_phase','phase_sep_weight', ...
     'E_target','E_offset','E_bulk_shift','c_ref','mu_ref','omega_ref', ...
     'c','e','E','p','mu_e','chi','phi')
 
@@ -535,6 +629,321 @@ for ip = find(phase_prop > 0 & count == 0)
 end
 
 phase_prop_real = area_now/Atot;
+
+end
+
+
+function [grain_phase,phase_prop_real] = Assign_Grain_Phases_By_Area_FixedSeed(grain_ID,phase_prop,fixed_grain,fixed_phase,forbidden_phase)
+
+Ngrain = max(grain_ID(:));
+Nphase = numel(phase_prop);
+
+if nargin < 5 || isempty(forbidden_phase)
+    forbidden_phase = [];
+end
+
+allowed_phase = setdiff(find(phase_prop > 0),forbidden_phase);
+
+if isempty(allowed_phase)
+    error('No allowed non-seed phases left for assignment.')
+end
+
+area   = accumarray(grain_ID(:),1,[Ngrain,1]);
+Atot   = sum(area);
+target = phase_prop(:).'*Atot;
+
+grain_phase = zeros(Ngrain,1);
+area_now    = zeros(1,Nphase);
+
+fixed_grain = fixed_grain(:).';
+fixed_phase = fixed_phase(:).';
+
+for ii = 1:numel(fixed_grain)
+    ig = fixed_grain(ii);
+    ip = fixed_phase(ii);
+
+    grain_phase(ig) = ip;
+    area_now(ip)    = area_now(ip) + area(ig);
+end
+
+free = setdiff(1:Ngrain,fixed_grain);
+[~,ord_local] = sort(area(free),'descend');
+ord = free(ord_local);
+
+for kk = 1:numel(ord)
+
+    ig = ord(kk);
+
+    if area(ig) == 0
+        [~,ii] = min(area_now(allowed_phase)-target(allowed_phase));
+        iph = allowed_phase(ii);
+        grain_phase(ig) = iph;
+        continue
+    end
+
+    merit = zeros(1,numel(allowed_phase));
+
+    for ii = 1:numel(allowed_phase)
+        ip = allowed_phase(ii);
+        trial     = area_now;
+        trial(ip) = trial(ip) + area(ig);
+        merit(ii) = sum((trial-target).^2);
+    end
+
+    [~,ii_best]     = min(merit);
+    iph             = allowed_phase(ii_best);
+    grain_phase(ig) = iph;
+    area_now(iph)   = area_now(iph) + area(ig);
+end
+
+% Ensure every allowed requested phase has at least one grain. Do not
+% reassign fixed seeds and do not create extra forbidden seed-phase grains.
+count = accumarray(grain_phase,1,[Nphase,1]).';
+
+for ip = find(phase_prop > 0 & count == 0 & ~ismember(1:Nphase,forbidden_phase))
+
+    donors = find(count > 1 & ~ismember(1:Nphase,forbidden_phase));
+
+    if isempty(donors)
+        error('Cannot allocate at least one grain to every requested phase.')
+    end
+
+    movable = setdiff(find(ismember(grain_phase,donors)),fixed_grain);
+
+    if isempty(movable)
+        error('Cannot allocate phase %d without changing the fixed seed.',ip)
+    end
+
+    [~,jm] = min(area(movable));
+    ig     = movable(jm);
+    donor  = grain_phase(ig);
+
+    grain_phase(ig) = ip;
+
+    count(donor)    = count(donor)-1;
+    count(ip)       = count(ip)+1;
+
+    area_now(donor) = area_now(donor)-area(ig);
+    area_now(ip)    = area_now(ip)+area(ig);
+end
+
+phase_prop_real = area_now/Atot;
+
+end
+
+
+function [grain_phase,phase_prop_real] = Assign_Grain_Phases_By_Area_Separated( ...
+    grain_ID,phase_prop,fixed_grain,fixed_phase,phase_sep_weight,forbidden_phase)
+%ASSIGN_GRAIN_PHASES_BY_AREA_SEPARATED Assign phases while avoiding neighbours.
+%
+% The area target is still used, but a large penalty is added if a grain is
+% assigned the same phase as an already assigned neighbouring grain.
+
+if nargin < 3 || isempty(fixed_grain)
+    fixed_grain = [];
+end
+if nargin < 4 || isempty(fixed_phase)
+    fixed_phase = [];
+end
+if nargin < 5 || isempty(phase_sep_weight)
+    phase_sep_weight = 1000;
+end
+if nargin < 6 || isempty(forbidden_phase)
+    forbidden_phase = [];
+end
+
+Ngrain = max(grain_ID(:));
+Nphase = numel(phase_prop);
+
+allowed_phase = setdiff(find(phase_prop > 0),forbidden_phase);
+
+if isempty(allowed_phase)
+    error('No allowed non-seed phases left for assignment.')
+end
+
+area   = accumarray(grain_ID(:),1,[Ngrain,1]);
+Atot   = sum(area);
+target = phase_prop(:).'*Atot;
+adj    = Build_Grain_Adjacency(grain_ID);
+
+grain_phase = zeros(Ngrain,1);
+area_now    = zeros(1,Nphase);
+count       = zeros(1,Nphase);
+
+fixed_grain = fixed_grain(:).';
+fixed_phase = fixed_phase(:).';
+
+for ii = 1:numel(fixed_grain)
+    ig = fixed_grain(ii);
+    ip = fixed_phase(ii);
+
+    grain_phase(ig) = ip;
+    area_now(ip)    = area_now(ip) + area(ig);
+    count(ip)       = count(ip) + 1;
+end
+
+free = setdiff(1:Ngrain,fixed_grain);
+[~,ord_local] = sort(area(free),'descend');
+ord = free(ord_local);
+
+for kk = 1:numel(ord)
+
+    ig    = ord(kk);
+    neigh = find(adj(ig,:) & grain_phase(:).' > 0);
+
+    missing = find(phase_prop > 0 & count == 0 & ~ismember(1:Nphase,forbidden_phase));
+
+    if numel(ord)-kk+1 <= numel(missing)
+        candidates = missing;
+    else
+        candidates = allowed_phase;
+    end
+
+    % First try phases that do not touch the same phase.
+    candidates_sep = [];
+
+    for ii = 1:numel(candidates)
+        ip = candidates(ii);
+
+        if ~any(grain_phase(neigh) == ip)
+            candidates_sep(end+1) = ip; %#ok<AGROW>
+        end
+    end
+
+    if ~isempty(candidates_sep)
+        candidates = candidates_sep;
+    end
+
+    merit = zeros(1,numel(candidates));
+
+    for ii = 1:numel(candidates)
+
+        ip = candidates(ii);
+
+        trial     = area_now;
+        trial(ip) = trial(ip) + area(ig);
+
+        area_err   = sum(((trial-target)./max(Atot,1)).^2);
+        same_neigh = nnz(grain_phase(neigh) == ip);
+
+        merit(ii) = area_err + phase_sep_weight*same_neigh;
+
+    end
+
+    [~,ii_best]     = min(merit);
+    iph             = candidates(ii_best);
+    grain_phase(ig) = iph;
+    area_now(iph)   = area_now(iph) + area(ig);
+    count(iph)      = count(iph) + 1;
+
+end
+
+% Short improvement sweep: remove remaining same-phase contacts when this
+% does not remove the last grain of a requested phase.
+for iter = 1:20
+
+    changed = 0;
+
+    for kk = 1:numel(ord)
+
+        ig    = ord(kk);
+        iph0  = grain_phase(ig);
+        neigh = find(adj(ig,:) & grain_phase(:).' > 0);
+
+        if ~any(grain_phase(neigh) == iph0)
+            continue
+        end
+
+        best_phase = iph0;
+        best_merit = inf;
+
+        for ii_phase = 1:numel(allowed_phase)
+
+            iph = allowed_phase(ii_phase);
+
+            if iph == iph0
+                continue
+            end
+
+            if count(iph0) <= 1 && phase_prop(iph0) > 0
+                continue
+            end
+
+            if any(grain_phase(neigh) == iph)
+                continue
+            end
+
+            trial       = area_now;
+            trial(iph0) = trial(iph0) - area(ig);
+            trial(iph)  = trial(iph)  + area(ig);
+
+            merit = sum(((trial-target)./max(Atot,1)).^2);
+
+            if merit < best_merit
+                best_merit = merit;
+                best_phase = iph;
+            end
+        end
+
+        if best_phase ~= iph0
+            grain_phase(ig) = best_phase;
+            area_now(iph0)  = area_now(iph0) - area(ig);
+            area_now(best_phase) = area_now(best_phase) + area(ig);
+            count(iph0) = count(iph0) - 1;
+            count(best_phase) = count(best_phase) + 1;
+            changed = 1;
+        end
+    end
+
+    if changed == 0
+        break
+    end
+end
+
+phase_prop_real = area_now/Atot;
+
+end
+
+
+function adj = Build_Grain_Adjacency(grain_ID)
+%BUILD_GRAIN_ADJACENCY Four-neighbour grain adjacency graph.
+
+Ngrain = max(grain_ID(:));
+adj    = false(Ngrain,Ngrain);
+
+A = grain_ID(:,1:end-1);
+B = grain_ID(:,2:end);
+mask = A ~= B & A > 0 & B > 0;
+pair = [A(mask),B(mask)];
+
+A = grain_ID(1:end-1,:);
+B = grain_ID(2:end,:);
+mask = A ~= B & A > 0 & B > 0;
+pair = [pair; A(mask),B(mask)];
+
+for ii = 1:size(pair,1)
+    i = pair(ii,1);
+    j = pair(ii,2);
+    adj(i,j) = true;
+    adj(j,i) = true;
+end
+
+end
+
+
+function n_same = Count_Same_Phase_Contacts(grain_ID,grain_phase)
+%COUNT_SAME_PHASE_CONTACTS Count unique neighbouring same-phase grain pairs.
+
+adj = Build_Grain_Adjacency(grain_ID);
+[i,j] = find(triu(adj,1));
+
+n_same = 0;
+
+for k = 1:numel(i)
+    if grain_phase(i(k)) == grain_phase(j(k))
+        n_same = n_same + 1;
+    end
+end
 
 end
 

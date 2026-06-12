@@ -533,6 +533,15 @@ else
 
 end
 
+NUM_L = NUM;
+if ~isfield(NUM_L,'linear_cache_id') || isempty(NUM_L.linear_cache_id)
+    NUM_L.linear_cache_id = 'CHLE';
+end
+if isfield(NUM,'ilu_reuse_steps_CHLE') && ~isempty(NUM.ilu_reuse_steps_CHLE)
+    NUM_L.ilu_reuse_steps = NUM.ilu_reuse_steps_CHLE;
+end
+cache_id = NUM_L.linear_cache_id;
+
 if ~any(mask_corr(:))
 
     %No interface correction required.
@@ -542,7 +551,19 @@ if ~any(mask_corr(:))
     Ared            = sparse(0,0);
     Rred            = zeros(0,1);
     outside_res_ratio = norm(R)/max(norm(R),eps);
-
+    LDIAG = struct();
+    LDIAG.linear_solver = 'none';
+    LDIAG.flag          = 0;
+    LDIAG.relres        = 0;
+    LDIAG.iter          = [0 0];
+    LDIAG.solve_time    = 0;
+    LDIAG.prec_time     = 0;
+    LDIAG.fallback_used = 0;
+    LDIAG.perm_method   = 'none';
+    LDIAG.linear_cache_id = cache_id;
+    LDIAG.ilu_cache_hit   = 0;
+    LDIAG.ilu_cache_age   = -1;
+    LDIAG.ilu_rebuilt     = 0;
 else
 
     active_node = mask_corr(:);
@@ -557,19 +578,12 @@ else
 
     end
 
-    Ared      = A(active,active);
-    Rred      = R(active);
-
-    q         = colamd(Ared);
-    y         = Ared(:,q)\Rred;
-
-    sol_red   = zeros(size(Rred));
-    sol_red(q)= y;
-
-    sol       = zeros(size(R));
-    sol(active) = sol_red;
-
-    relres    = norm(Ared*sol_red-Rred)/max(norm(Rred),eps);
+    Ared             = A(active,active);
+    Rred             = R(active);
+    [sol_red,LDIAG]  = PF_LinearSolve(Ared,Rred,NUM_L);
+    sol              = zeros(size(R));
+    sol(active)      = sol_red;
+    relres           = LDIAG.relres;
 
     outside   = true(Nmu,1);
     outside(active) = false;
@@ -650,7 +664,19 @@ end
 % ------------------------------------------------------------
 % Diagnostics
 % ------------------------------------------------------------
-DIAG.relres          = relres;
+DIAG.relres           = relres;
+DIAG.linear_cache_id  = LDIAG.linear_cache_id;
+DIAG.ilu_cache_hit    = LDIAG.ilu_cache_hit;
+DIAG.ilu_cache_age    = LDIAG.ilu_cache_age;
+DIAG.ilu_rebuilt      = LDIAG.ilu_rebuilt;
+DIAG.linear_solver    = LDIAG.linear_solver;
+DIAG.solve_flag       = LDIAG.flag;
+DIAG.solve_relres     = LDIAG.relres;
+DIAG.solve_iter       = LDIAG.iter;
+DIAG.solve_time       = LDIAG.solve_time;
+DIAG.prec_time        = LDIAG.prec_time;
+DIAG.fallback_used    = LDIAG.fallback_used;
+DIAG.perm_method      = LDIAG.perm_method;
 DIAG.matrix_size_full = Nmu;
 DIAG.nnz_full         = nnz(A);
 DIAG.matrix_size      = numel(active);
@@ -826,10 +852,6 @@ end
 
 function Huse = Make_KappaC_Hessian(H,PARAM)
 %MAKE_KAPPAC_HESSIAN Hessian used only for implicit c-kappa response.
-%
-% Default is positive-definite stabilization. This does not change the raw
-% thermodynamic driving force; it only regularizes dc = inv(H)*J'*dmu inside
-% the implicit fourth-order c-gradient term.
 
 [Nc,~,N] = size(H);
 
@@ -847,47 +869,56 @@ if isfield(PARAM,'kappa_c_posdef')
     posdef = PARAM.kappa_c_posdef;
 end
 
-Huse = zeros(size(H));
+H = 0.5*(H + permute(H,[2 1 3]));
 
-for i = 1:N
+bad = squeeze(any(any(~isfinite(H),1),2));
 
-    A = 0.5*(H(:,:,i)+H(:,:,i).');
+if any(bad)
+    H(:,:,bad) = repmat(eye(Nc),1,1,nnz(bad));
+end
 
-    if any(~isfinite(A(:)))
-        A = eye(Nc);
+[V,D] = pageeig(H);
+
+lam = zeros(Nc,N);
+
+for i = 1:Nc
+    lam(i,:) = reshape(D(i,i,:),1,N);
+end
+
+scale     = max(1,max(abs(lam),[],1));
+floor_val = h_floor .* scale;
+
+if posdef == 1
+
+    lam_use = max(abs(lam),floor_val);
+
+    if isfinite(h_cap)
+        lam_use = min(lam_use,h_cap .* scale);
     end
 
-    [V,D] = eig(A);
-    lam   = diag(D);
+else
 
-    scale = max(1,max(abs(lam)));
-    floor_val = h_floor*scale;
+    sgn = sign(lam);
+    sgn(sgn == 0) = 1;
 
-    if posdef == 1
+    lam_abs = max(abs(lam),floor_val);
 
-        lam = max(abs(lam),floor_val);
-
-        if isfinite(h_cap)
-            lam = min(lam,h_cap*scale);
-        end
-
-    else
-
-        sgn = sign(lam);
-        sgn(sgn == 0) = 1;
-
-        lam = sgn.*max(abs(lam),floor_val);
-
-        if isfinite(h_cap)
-            lam = sgn.*min(abs(lam),h_cap*scale);
-        end
-
+    if isfinite(h_cap)
+        lam_abs = min(lam_abs,h_cap .* scale);
     end
 
-    Huse(:,:,i) = V*diag(lam)*V.';
-    Huse(:,:,i) = 0.5*(Huse(:,:,i)+Huse(:,:,i).');
+    lam_use = sgn .* lam_abs;
 
 end
+
+Duse = zeros(Nc,Nc,N);
+
+for i = 1:Nc
+    Duse(i,i,:) = reshape(lam_use(i,:),1,1,N);
+end
+
+Huse = pagemtimes(pagemtimes(V,Duse),permute(V,[2 1 3]));
+Huse = 0.5*(Huse + permute(Huse,[2 1 3]));
 
 end
 
@@ -898,34 +929,27 @@ function [R,rows,cols,vals,k] = Add_KappaC_Block( ...
     idx_UR,idx_DR,idx_UL,idx_DL,dx2,dy2,dx4,dy4)
 %ADD_KAPPAC_BLOCK Add composition-space fourth-order contribution.
 %
-% Same algebra as the original version, but faster assembly:
-%   - explicit old-c contribution is unchanged;
-%   - implicit coefficients are accumulated over phase/composition first;
-%   - each neighbour block is inserted once per (row element, mu element).
-%
-% This avoids adding many duplicate sparse entries for every phase and every
-% composition variable. The final matrix represents the same summed operator.
+% Faster version with same operator:
+%   - vectorizes the sum over phase composition variables ic;
+%   - inserts each final neighbour block once per element m;
+%   - skips rows where the local kappa stencil coefficient is zero.
 
 Ne = numel(idMu);
 [ny,nx] = size(kappa_eff);
-Nnode   = numel(idx_c);
+Nall    = ny*nx;
+Nrow    = numel(idx_c);
 
-% Accumulators for the implicit dmu block.
-% acc{m,ioff} stores the coefficient for element m at one stencil offset.
-acc = cell(Ne,13);
+idx_off = {idx_c,idx_L,idx_R,idx_U,idx_D, ...
+           idx_L2,idx_R2,idx_U2,idx_D2, ...
+           idx_UR,idx_DR,idx_UL,idx_DL};
 
-for m = 1:Ne
-    for io = 1:13
-        acc{m,io} = zeros(Nnode,1);
-    end
-end
+acc = zeros(Nrow,Ne,13);
 
 for ik = 1:numel(KAPC)
 
-    p_ig = KAPC(ik).p;
-    K_l  = Ml.*kappa_eff.*p_ig;
+    K_l = Ml .* kappa_eff .* KAPC(ik).p;
 
-    if max(abs(K_l(:))) == 0
+    if ~any(K_l(:))
         continue
     end
 
@@ -934,97 +958,68 @@ for ik = 1:numel(KAPC)
                       idx_L2,idx_R2,idx_U2,idx_D2,idx_UR,idx_DR,idx_UL,idx_DL, ...
                       dx2,dy2,dx4,dy4);
 
-    for ic = 1:KAPC(ik).Nc
+    q_off = {q_C,q_L,q_R,q_U,q_D, ...
+             q_L2,q_R2,q_U2,q_D2, ...
+             q_UR,q_DR,q_UL,q_DL};
 
-        J_li = reshape(KAPC(ik).J(l,ic,:),ny,nx);
-        J_c  = J_li(idx_c);
+    Nc   = KAPC(ik).Nc;
+    Cmat = KAPC(ik).c;              % Nc x Nall
+    Xall = KAPC(ik).X;              % Nc x Ne x Nall
 
-        if max(abs(J_c(:))) == 0
+    % J_l is Nc x Nall
+    J_l  = reshape(KAPC(ik).J(l,:,:),Nc,Nall);
+    J_c0 = J_l(:,idx_c);            % Nc x Nrow
+
+    for io = 1:13
+
+        q = q_off{io};
+
+        use = isfinite(q) & q ~= 0;
+
+        if ~any(use)
             continue
         end
 
-        c_ic = reshape(KAPC(ik).c(ic,:),ny,nx);
+        idxo  = idx_off{io};
+        idxou = idxo(use);
+        qu    = q(use);
 
-        C_c  = c_ic(idx_c);
-        C_L  = c_ic(idx_L);
-        C_R  = c_ic(idx_R);
-        C_U  = c_ic(idx_U);
-        C_D  = c_ic(idx_D);
+        J_c = J_c0(:,use);
 
-        C_L2 = c_ic(idx_L2);
-        C_R2 = c_ic(idx_R2);
-        C_U2 = c_ic(idx_U2);
-        C_D2 = c_ic(idx_D2);
+        % Explicit old-c contribution:
+        %   sum_ic J_l_ic(center) * c_ic(offset)
+        JC = sum(J_c .* Cmat(:,idxou),1).';
+        R(row(use)) = R(row(use)) - qu .* JC;
 
-        C_UR = c_ic(idx_UR);
-        C_DR = c_ic(idx_DR);
-        C_UL = c_ic(idx_UL);
-        C_DL = c_ic(idx_DL);
+        % Implicit dc/dmu contribution:
+        %   sum_ic J_l_ic(center) * X_icm(offset)
+        Xnei = Xall(:,:,idxou);                         % Nc x Ne x Nuse
+        J3   = reshape(J_c,Nc,1,nnz(use));              % Nc x 1  x Nuse
+        JX   = reshape(sum(J3 .* Xnei,1),Ne,nnz(use)).'; % Nuse x Ne
 
-        Kc_old = ...
-            q_C .*C_c  + ...
-            q_L .*C_L  + q_R .*C_R  + q_U .*C_U  + q_D .*C_D  + ...
-            q_L2.*C_L2 + q_R2.*C_R2 + q_U2.*C_U2 + q_D2.*C_D2 + ...
-            q_UR.*C_UR + q_DR.*C_DR + q_UL.*C_UL + q_DL.*C_DL;
+        acc(use,:,io) = acc(use,:,io) + qu .* JX;
 
-        R(row) = R(row) - J_c.*Kc_old;
-
-        Jq_C  = J_c.*q_C;
-        Jq_L  = J_c.*q_L;
-        Jq_R  = J_c.*q_R;
-        Jq_U  = J_c.*q_U;
-        Jq_D  = J_c.*q_D;
-        Jq_L2 = J_c.*q_L2;
-        Jq_R2 = J_c.*q_R2;
-        Jq_U2 = J_c.*q_U2;
-        Jq_D2 = J_c.*q_D2;
-        Jq_UR = J_c.*q_UR;
-        Jq_DR = J_c.*q_DR;
-        Jq_UL = J_c.*q_UL;
-        Jq_DL = J_c.*q_DL;
-
-        for m = 1:Ne
-
-            X_im = reshape(KAPC(ik).X(ic,m,:),ny,nx);
-
-            acc{m,1}  = acc{m,1}  + Jq_C .*X_im(idx_c);
-            acc{m,2}  = acc{m,2}  + Jq_L .*X_im(idx_L);
-            acc{m,3}  = acc{m,3}  + Jq_R .*X_im(idx_R);
-            acc{m,4}  = acc{m,4}  + Jq_U .*X_im(idx_U);
-            acc{m,5}  = acc{m,5}  + Jq_D .*X_im(idx_D);
-
-            acc{m,6}  = acc{m,6}  + Jq_L2.*X_im(idx_L2);
-            acc{m,7}  = acc{m,7}  + Jq_R2.*X_im(idx_R2);
-            acc{m,8}  = acc{m,8}  + Jq_U2.*X_im(idx_U2);
-            acc{m,9}  = acc{m,9}  + Jq_D2.*X_im(idx_D2);
-
-            acc{m,10} = acc{m,10} + Jq_UR.*X_im(idx_UR);
-            acc{m,11} = acc{m,11} + Jq_DR.*X_im(idx_DR);
-            acc{m,12} = acc{m,12} + Jq_UL.*X_im(idx_UL);
-            acc{m,13} = acc{m,13} + Jq_DL.*X_im(idx_DL);
-
-        end
     end
+
 end
 
-% Insert the accumulated implicit c-kappa block.
 for m = 1:Ne
 
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_c), acc{m,1});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L), acc{m,2});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R), acc{m,3});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U), acc{m,4});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D), acc{m,5});
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_c),  acc(:,m,1));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L),  acc(:,m,2));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R),  acc(:,m,3));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U),  acc(:,m,4));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D),  acc(:,m,5));
 
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L2),acc{m,6});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R2),acc{m,7});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U2),acc{m,8});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D2),acc{m,9});
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L2), acc(:,m,6));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R2), acc(:,m,7));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U2), acc(:,m,8));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D2), acc(:,m,9));
 
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_UR),acc{m,10});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_DR),acc{m,11});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_UL),acc{m,12});
-    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_DL),acc{m,13});
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_UR), acc(:,m,10));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_DR), acc(:,m,11));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_UL), acc(:,m,12));
+    [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_DL), acc(:,m,13));
 
 end
 
@@ -1037,31 +1032,37 @@ function [q_C,q_L,q_R,q_U,q_D,q_L2,q_R2,q_U2,q_D2,q_UR,q_DR,q_UL,q_DL] = ...
                   dx2,dy2,dx4,dy4)
 %KAPPA4_COEFFS Variable-coefficient lap(K*lap(field)) coefficients.
 
+cx4 = 1/dx4;
+cy4 = 1/dy4;
+cxy = 1/(dx2*dy2);
+
 K_c = K_l(idx_c);
 K_L = K_l(idx_L);
 K_R = K_l(idx_R);
 K_U = K_l(idx_U);
 K_D = K_l(idx_D);
 
-q_L  = -2*(K_L+K_c)/dx4 - 2*(K_L+K_c)/(dx2*dy2);
-q_R  = -2*(K_R+K_c)/dx4 - 2*(K_R+K_c)/(dx2*dy2);
-q_U  = -2*(K_U+K_c)/dy4 - 2*(K_U+K_c)/(dx2*dy2);
-q_D  = -2*(K_D+K_c)/dy4 - 2*(K_D+K_c)/(dx2*dy2);
+q_L  = -(2*cx4 + 2*cxy) .* (K_L + K_c);
+q_R  = -(2*cx4 + 2*cxy) .* (K_R + K_c);
+q_U  = -(2*cy4 + 2*cxy) .* (K_U + K_c);
+q_D  = -(2*cy4 + 2*cxy) .* (K_D + K_c);
 
-q_L2 = K_L/dx4;
-q_R2 = K_R/dx4;
-q_U2 = K_U/dy4;
-q_D2 = K_D/dy4;
+q_L2 = cx4 .* K_L;
+q_R2 = cx4 .* K_R;
+q_U2 = cy4 .* K_U;
+q_D2 = cy4 .* K_D;
 
-q_UR = (K_U+K_R)/(dx2*dy2);
-q_DR = (K_D+K_R)/(dx2*dy2);
-q_UL = (K_U+K_L)/(dx2*dy2);
-q_DL = (K_D+K_L)/(dx2*dy2);
+q_UR = cxy .* (K_U + K_R);
+q_DR = cxy .* (K_D + K_R);
+q_UL = cxy .* (K_U + K_L);
+q_DL = cxy .* (K_D + K_L);
 
-q_C  = (K_L+K_R)/dx4 + (K_U+K_D)/dy4 + ...
-       4*K_c/dx4 + 4*K_c/dy4 + 8*K_c/(dx2*dy2);
+q_C  = cx4 .* (K_L + K_R + 4*K_c) + ...
+       cy4 .* (K_U + K_D + 4*K_c) + ...
+       8*cxy .* K_c;
 
 end
+
 
 
 function H = SymPages(H)

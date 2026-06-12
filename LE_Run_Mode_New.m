@@ -17,7 +17,7 @@ p_off      =  3e-3;
 Pmax       =  3;
 
 %Local equilibrium parameters
-alpha_LE   = [0.8 0.5 0.4 0.3];
+alpha_LE   = [0.8 0.5 0.4 0.2];
 iter_LE    = [100 100 100 100];
 iter_GP    = [100 100 100 100];
 
@@ -61,17 +61,6 @@ if isfield(PARAM,'LE_Pmax')
 end
 
 Pmax = min(Pmax,Np);
-
-%Optional local equilibrium controls
-if isfield(PARAM,'LE_alpha')
-    alpha_LE = PARAM.LE_alpha;
-end
-if isfield(PARAM,'LE_iter_LE')
-    iter_LE = PARAM.LE_iter_LE;
-end
-if isfield(PARAM,'LE_iter_GP')
-    iter_GP = PARAM.LE_iter_GP;
-end
 
 %Damping of the interface excess energy
 pars_orig      = pars;
@@ -223,6 +212,7 @@ STATE.chi      = chi;
 STATE.omg      = omg;
 STATE.omg_raw  = omg_raw;
 STATE.LE_state = LE_state;
+
 end
 
 

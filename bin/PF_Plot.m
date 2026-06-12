@@ -74,7 +74,7 @@ if strcmp(w,'phase2d')
 
     [~,phase_ID] = max(p_phase,[],3);
 
-    pcolor(GRID.x*1e6,GRID.y*1e6,phase_ID)
+    pcolor(GRID.x,GRID.y,phase_ID)
     shading flat
     axis equal tight
     colormap(gca,jet(Nphase))
@@ -99,7 +99,7 @@ tok = regexp(w,'^e(\d+)$','tokens');
 if ~isempty(tok)
 
     ie = str2double(tok{1}{1});
-    pcolor(GRID.x*1e6,GRID.y*1e6,STATE.E{ie})
+    pcolor(GRID.x,GRID.y,STATE.E{ie})
     shading interp; axis equal tight; colorbar
     title(sprintf('E%d',ie))
     xlabel('x \mum')
@@ -116,7 +116,7 @@ tok = regexp(w,'^mu_?e?(\d+)$','tokens');
 if ~isempty(tok)
 
     ie = str2double(tok{1}{1});
-    pcolor(GRID.x*1e6,GRID.y*1e6,STATE.mu_e{ie})
+    pcolor(GRID.x,GRID.y,STATE.mu_e{ie})
     shading interp; axis equal tight; colorbar
     title(sprintf('\\mu_e%d',ie))
     xlabel('x \mum')
@@ -133,7 +133,7 @@ tok = regexp(w,'^p(\d+)$','tokens');
 if ~isempty(tok)
 
     iph = str2double(tok{1}{1});
-    pcolor(GRID.x*1e6,GRID.y*1e6,p_phase(:,:,iph))
+    pcolor(GRID.x,GRID.y,p_phase(:,:,iph))
     shading interp; axis equal tight; colorbar
     title(sprintf('p %s',phs_name{iph}))
     xlabel('x \mum')
@@ -153,7 +153,7 @@ if ~isempty(tok)
     grains = find(phase_index == phase_ids(iph));
     phi_phase = sum(STATE.phi(:,:,grains),3);
 
-    pcolor(GRID.x*1e6,GRID.y*1e6,phi_phase)
+    pcolor(GRID.x,GRID.y,phi_phase)
     shading interp; axis equal tight; colorbar
     title(sprintf('\\phi %s',phs_name{iph}))
     xlabel('x \mum')
@@ -210,11 +210,11 @@ if ~isempty(tok)
 
     % Mask out regions where this phase is not present
     if ~plot_all
-        p_cut = 1e-2;
+        p_cut = 5e-1;
         c_plot(wsum < p_cut) = NaN;
     end
 
-    pcolor(GRID.x*1e6,GRID.y*1e6,c_plot)
+    pcolor(GRID.x,GRID.y,c_plot)
     shading interp
     axis equal tight
     colorbar
@@ -255,7 +255,7 @@ if ~isempty(tok)
     omg1 = mean(STATE.omg(:,:,grains1),3);
     omg2 = mean(STATE.omg(:,:,grains2),3);
 
-    pcolor(GRID.x*1e6,GRID.y*1e6,omg1 - omg2)
+    pcolor(GRID.x,GRID.y,omg1 - omg2)
     shading interp; axis equal tight; colorbar
     title(sprintf('\\omega_{%s} - \\omega_{%s}',phs_name{iph1},phs_name{iph2}))
     xlabel('x \mum')
@@ -272,7 +272,7 @@ if ~isempty(tok)
     grains = find(phase_index == phase_ids(iph));
     omg_phase = mean(STATE.omg(:,:,grains),3);
 
-    pcolor(GRID.x*1e6,GRID.y*1e6,omg_phase)
+    pcolor(GRID.x,GRID.y,omg_phase)
     shading interp; axis equal tight; colorbar
     title(sprintf('\\omega %s',phs_name{iph}))
     xlabel('x \mum')
