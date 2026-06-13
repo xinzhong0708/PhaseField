@@ -21,16 +21,16 @@ phs_name = {'A','B'};
 % Initial independent endmember compositions
 c_value    = cell(1,numel(phs_name));
 c_value{1} = [1.1e-3];        % A, solid core
-c_value{2} = [0.30];          % B, matrix/liquid
+c_value{2} = [0.40];          % B, matrix/liquid
 
 % Domain
 Lx = 1;
 Ly = 1;
-nx = 100;
-ny = 100;
+nx = 160;
+ny = 160;
 
 % Circular core geometry, in the same physical unit as Lx and Ly
-core_radius = 0.15;
+core_radius = 0.05;
 core_center = [0.50 0.50];     % [x0 y0]
 
 % Scaling / penalty
@@ -40,7 +40,7 @@ PHYS.L_sc   = 1;
 
 E_sc        = PHYS.E_sc;
 L_sc        = PHYS.L_sc;
-eta0        = 5000;
+eta0        = 1000;
 
 %% ========================================================================
 %  Load thermodynamics

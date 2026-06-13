@@ -16,7 +16,7 @@ addpath('..\ThermoData')
 phs_name = {'A','B'};
 
 % Requested phase proportions
-phase_prop = [0.1 0.9];
+phase_prop = [0.2 0.8];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions
@@ -27,8 +27,8 @@ c_value{2} = [0.30];          % B
 % Domain
 Lx = 1;
 Ly = 1;
-nx = 500;
-ny = 4;
+nx = 100;
+ny = 100;
 
 % Scaling / penalty
 PHYS        = struct();
@@ -37,7 +37,7 @@ PHYS.L_sc   = 1;
 
 E_sc        = PHYS.E_sc;
 L_sc        = PHYS.L_sc;
-eta0        = 1000;
+eta0        = 1200;
 
 %% ========================================================================
 %  Load thermodynamics
@@ -82,20 +82,22 @@ phase_ID = zeros(ny,nx);
 grain_ID = zeros(ny,nx);
 seed_xy  = zeros(Ngrain,2);
 
-for ig = 1:Ngrain
+region1  = zeros(ny,nx);
+region2  = zeros(ny,nx);
+rr       = 0.15;
+[x2,y2]  = meshgrid(x,y);
+r        = sqrt((x2-x(end)/2).^2 + (y2-y(end)/2).^2);
+region1(r<rr) = 1;
+region2(r>rr) = 1;
 
-    iph = grain_phase(ig);
-    ix1 = x_edges(ig);
-    ix2 = x_edges(ig+1)-1;
+phase_ID(region1==1) = 1;
+phase_ID(region2==1) = 2;
+grain_ID(region1==1) = 1;
+grain_ID(region2==1) = 2;
 
-    phi(:,ix1:ix2,ig)   = 1;
-    phase_ID(:,ix1:ix2) = iph;
-    grain_ID(:,ix1:ix2) = ig;
+phi(:,:,1) = region1;
+phi(:,:,2) = region2;
 
-    seed_xy(ig,1) = mean(x(ix1:ix2));
-    seed_xy(ig,2) = mean(y);
-
-end
 
 phase_prop_geom = zeros(1,Nphase);
 for ip = 1:Nphase
@@ -223,7 +225,7 @@ save('Map2d.mat', ...
     'PHYS','GRID','MODEL','PARAM','STATE', ...
     'E_sc','L_sc','eta','pars','Np','Ne','Nphase','Ngrain', ...
     'phs_name','phase_prop','phase_prop_geom','phase_prop_map', ...
-    'map_mode','grain_ID','phase_ID','grain_phase','seed_xy', ...
+    'map_mode','grain_ID','phase_ID','grain_phase', ...
     'grain_size','grain_size_real','Ngrain_user','rng_seed','periodic_map', ...
     'E_target','E_offset','E_bulk_shift','c_ref', ...
     'c','e','E','p','mu_e','chi','phi')

@@ -1,7 +1,7 @@
 clear; clf; colormap(jet(256))
 % 
 %Load data
-load 80
+load test
 
 %% Solve it with the solver
 NUM.norm_phi       =  0;
@@ -13,47 +13,115 @@ Ne                 =  numel(STATE_OLD.E);
 PARAM.kappa_eff    =  zeros(GRID.ny,GRID.nx);
 
 NUM.use_mu_band     = 1;
-NUM.mu_band_thick   = 15;
+NUM.mu_band_thick   = 25;
 NUM.mu_p_cut        = 1e-8;
-NUM.use_order_cache = 1;
-NUM.phi_mask_thick  = 5;
+NUM.use_order_cache = 0;
+NUM.phi_mask_thick  = 15;
 
-NUM.linear_tol     =  1e-12;
+NUM.linear_tol      =  1e-15;
+NUM.linear_solver   = 'direct';
+
+STATE_OLD          =  STATE;
+Ne                 =  numel(STATE_OLD.E);
+PARAM.kappa_eff    =  zeros(GRID.ny,GRID.nx);
+
+% For equation check, keep this off unless the checker includes A_ac exactly
+NUM.use_Aac        =  0;
+
+% Current solver dmu-coupling still uses PARAM.L, not anisotropic L
+PARAM.aniso_chemical = 0;
+
+% Recompute anisotropic AC coefficients from the same reference state
+PARAM               = Calc_AC_Anisotropy_Simple(STATE_OLD,PARAM,GRID);
 
 tic
-[STATE,DIAG]        = PF_Coupled_ACCH_LETangent_CS(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
+[STATE,DIAG]        = PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
 toc
 
 
-
 %% 1) AC CHECK
-alpha        = 2;
+alpha        = 1;
 dt           = NUM.dt_phy;
 dx           = GRID.dx;
 dy           = GRID.dy;
 dphi         = STATE.phi(:,:,alpha) - STATE_OLD.phi(:,:,alpha);
 
-%Chemical part of the source term
-chem         = zeros(size(dphi));
-for ip = 1:size(STATE_OLD.p,3)
-    dpdphi = MODEL.dpdphi(alpha,ip,STATE_OLD.phi);
-    for ie = 1:numel(STATE_OLD.mu_e)
-        dmu  = STATE.mu_e{ie} - STATE_OLD.mu_e{ie};
-        chem = chem - PARAM.L .* dpdphi .* STATE_OLD.e{ip}{ie} .* dmu;
-    end
+% Use the same anisotropic LK as the ACCH solver
+if isfield(PARAM,'LK_AC') && ~isempty(PARAM.LK_AC) && size(PARAM.LK_AC,3) >= alpha
+    LK_a = PARAM.LK_AC(:,:,alpha);
+else
+    LK_a = PARAM.LK;
 end
-Jaa          = DIAG.Jphi_diag{alpha};
-STATE_SRC    = Calc_S_AllenCahn(STATE_OLD,PARAM,MODEL);
-S_old        = STATE_SRC.S_AC;
-lhs          = dphi/dt - PARAM.LK .* Laplacian_Reflex(dphi,dx,dy) - Jaa .* dphi + chem;
-rhs          = PARAM.LK .* Laplacian_Reflex(STATE_OLD.phi(:,:,alpha),dx,dy) + S_old{alpha};
 
-subplot(121);pcolor(lhs-rhs);shading interp;colorbar;title('AC residual')
+% Active rows only. Outside this mask, the AC equation is not solved.
+mask_ac = DIAG.maskPhi(:,:,alpha);
+
+% Rebuild chemical tangent exactly as in the solver:
+%
+%   B_ie_alpha = 2*phi_alpha/D * (e_alpha_ie - ebar_ie)
+%   coeff_mu   = -PARAM.L * B_ie_alpha
+%
+eps_phi = 1e-14;
+if isfield(PARAM,'eps_phi')
+    eps_phi = PARAM.eps_phi;
+end
+
+Dphi  = sum(STATE_OLD.phi.^2,3) + eps_phi;
+fac   = 2 .* STATE_OLD.phi(:,:,alpha) ./ Dphi;
+
+chem  = zeros(size(dphi));
+
+for ie = 1:Ne
+    e_bar = zeros(size(dphi));
+    for ig = 1:size(STATE_OLD.p,3)
+        p_tan = STATE_OLD.phi(:,:,ig).^2 ./ Dphi;
+        e_bar = e_bar + p_tan .* STATE_OLD.e{ig}{ie};
+    end
+    B_ie_alpha = fac .* (STATE_OLD.e{alpha}{ie} - e_bar);
+    dmu_ie = STATE.mu_e{ie} - STATE_OLD.mu_e{ie};
+    chem = chem - PARAM.L .* B_ie_alpha .* dmu_ie;
+end
+
+% Jphi term
+Jaa = DIAG.Jphi_diag{alpha};
+
+% Aac term. For this check NUM.use_Aac should be 0.
+Aac = zeros(size(dphi));
+if isfield(PARAM,'A_ac') && isequal(size(PARAM.A_ac),size(dphi))
+    Aac = PARAM.A_ac;
+end
+
+% Source term must be computed with same PARAM containing L_AC/LK_AC
+STATE_SRC = Calc_S_AllenCahn(STATE_OLD,PARAM,MODEL);
+S_old     = STATE_SRC.S_AC;
+
+lhs = dphi/dt ...
+    + Aac .* dphi ...
+    - LK_a .* Laplacian_Reflex(dphi,dx,dy) ...
+    - Jaa .* dphi ...
+    + chem;
+
+rhs = LK_a .* Laplacian_Reflex(STATE_OLD.phi(:,:,alpha),dx,dy) ...
+    + S_old{alpha};
+
+res_ac = lhs - rhs;
+
+res_plot = res_ac;
+res_plot(~mask_ac) = NaN;
+
+subplot(121)
+pcolor(res_plot); shading interp; colorbar
+title('AC residual, active rows only')
+
+fprintf('AC residual active max   = %.6e\n',max(abs(res_ac(mask_ac)),[],'all'))
+fprintf('AC residual inactive max = %.6e\n',max(abs(res_ac(~mask_ac)),[],'all'))
+
+
 
 
 
 %% 2) CH CHECK
-ieq    = 2;
+ieq    = 1;
 dmu    = cell(1,Ne);
 for ie = 1:Ne
     dmu{ie} = STATE.mu_e{ie} - STATE_OLD.mu_e{ie};
@@ -95,10 +163,26 @@ for alpha = 1:size(STATE_OLD.phi,3)
 end
 
 
-M      = PARAM.M{ieq};
-Dmu    = Diff_Reflex(STATE.mu_e{ieq},M,dx,dy);
-Kc     = KappaC_FromKAPC(ieq,dmu,M,PARAM.kappa_eff,DIAG.KAPC,dx,dy);
+% Diffusion part with possible off-diagonal mobility:
+%   Dmu_l = sum_m -div(M_lm grad(mu_m))
+Dmu = zeros(size(STATE_OLD.E{ieq}));
+
+for je = 1:Ne
+
+    Mlm = Get_Mobility_Local(PARAM,ieq,je,GRID.ny,GRID.nx);
+
+    if any(Mlm(:) ~= 0)
+        Dmu = Dmu + Diff_Reflex(STATE.mu_e{je},Mlm,dx,dy);
+    end
+
+end
+
+% Fourth-order term remains diagonal, using only M_ll
+Mll    = Get_Mobility_Local(PARAM,ieq,ieq,GRID.ny,GRID.nx);
+Kc     = KappaC_FromKAPC(ieq,dmu,Mll,PARAM.kappa_eff,DIAG.KAPC,dx,dy);
+
 lhs_ch = dE/dt + Dmu + Kc;
+
 rhs_ch = zeros(size(lhs_ch));
 res_ch = lhs_ch - rhs_ch;
 
@@ -371,5 +455,39 @@ end
 period = 2*n - 2;
 r      = mod(idx - 1,period);
 idx    = 1 + min(r,period - r);
+
+end
+
+function Mlm = Get_Mobility_Local(PARAM,l,m,ny,nx)
+
+%GET_MOBILITY_LOCAL Read diagonal or full mobility matrix.
+%
+% Old format:
+%   PARAM.M{l}
+%
+% New format:
+%   PARAM.M{l,m}
+
+if iscell(PARAM.M) && size(PARAM.M,1) >= l && size(PARAM.M,2) >= m && size(PARAM.M,1) > 1
+
+    Mlm = PARAM.M{l,m};
+
+    if isempty(Mlm)
+        Mlm = zeros(ny,nx);
+    end
+
+else
+
+    if l == m
+        Mlm = PARAM.M{l};
+    else
+        Mlm = zeros(ny,nx);
+    end
+
+end
+
+if isscalar(Mlm)
+    Mlm = Mlm*ones(ny,nx);
+end
 
 end

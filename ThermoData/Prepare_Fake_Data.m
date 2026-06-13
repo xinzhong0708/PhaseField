@@ -37,7 +37,7 @@ W0             =  zeros(2,2);
 
 % ------------------------------------------------------------
 % Mechanical endmember reference energies
-g0_A           =  [6; 0];
+g0_A           =  [6; 0]+1;
 g0_B           =  [5; 6];
 
 g0_all         =  {g0_A,g0_B};
@@ -49,7 +49,7 @@ for ip = 1:numel(phase_all)
     if ip == 1
         w              =  zeros(2,2,3);
         w(:,:,1)       =  W0;
-        w(1,1,1)       =  20000;
+        w(1,1,1)       =  1000;
     end
     if ip == 2
         w              =  zeros(2,2,3);
@@ -99,4 +99,4 @@ load Data_B
 R2       = PhaseThermo(par,c{2});
 
 plot(c{1}{1},R1.g , c{2}{1},R2.g)
-ylim([-5,10])
+ylim([-2,3])

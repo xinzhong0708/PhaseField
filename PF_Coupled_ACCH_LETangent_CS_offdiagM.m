@@ -1,4 +1,4 @@
-function [STATE_NEW,DIAG] = PF_Coupled_ACCH_LETangent_CS(STATE_REF,PARAM,MODEL,GRID,PHYS,NUM,STATE_COEF)
+function [STATE_NEW,DIAG] = PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_REF,PARAM,MODEL,GRID,PHYS,NUM,STATE_COEF)
 %PF_COUPLED_ACCH_LETANGENT
 %
 % Masked coupled AC-CH tangent solve for many grains.
@@ -52,6 +52,7 @@ end
 [ny,nx,Ngrain] = size(phi_ref);
 Ne             = numel(E_ref);
 Nnode          = nx*ny;
+use_full_M     = Is_Full_M_Local(PARAM.M,Ne);
 
 dt = NUM.dt_phy;
 dx = GRID.dx;
@@ -310,6 +311,10 @@ if use_kappa_c && ~isempty(KAPC)
     max_nnz = max_nnz + Nnode * Ne * 13 * Ne;
 end
 
+if use_full_M
+    max_nnz = max_nnz + Nnode * Ne * 5 * (Ne-1);
+end
+
 rows = zeros(max_nnz,1);
 cols = zeros(max_nnz,1);
 vals = zeros(max_nnz,1);
@@ -335,10 +340,17 @@ for alpha = 1:Ngrain
 
     lap_phi_ref = laplacian_reflect(phi_a,dx,dy);
 
-    rhs_full = PARAM.LK .* lap_phi_ref + S_AC{alpha};
+    if isfield(PARAM,'LK_AC') && size(PARAM.LK_AC,3) >= alpha
+        LK_a = PARAM.LK_AC(:,:,alpha);
+    else
+        LK_a = PARAM.LK;
+    end
+
+    rhs_full = LK_a .* lap_phi_ref + S_AC{alpha};
     R(row) = rhs_full(idx_a);
 
-    LKc = PARAM.LK(idx_a);
+    LKc = LK_a(idx_a);
+
     Aac = PARAM.A_ac(idx_a);
 
     cC = 1/dt + Aac + 2*LKc/dx2 + 2*LKc/dy2;
@@ -402,29 +414,52 @@ if use_kappa_c
 
         row = idMu{l}(idx_c);
 
-        Ml   = PARAM.M{l};
-        M_c  = Ml(idx_c);
-        M_L  = Ml(idx_L);
-        M_R  = Ml(idx_R);
-        M_U  = Ml(idx_U);
-        M_D  = Ml(idx_D);
+        % Diagonal mobility is still used by the fourth-order kappa term.
+        Ml   = Get_Mobility_Local(PARAM,l,l,ny,nx);
 
-        d_L = -(M_L + M_c)/2/dx2;
-        d_R = -(M_R + M_c)/2/dx2;
-        d_U = -(M_U + M_c)/2/dy2;
-        d_D = -(M_D + M_c)/2/dy2;
-        d_C = -(d_L + d_R + d_U + d_D);
+        % Diffusion residual with optional off-diagonal mobility:
+        %   D_lm mu_m = -div(M_lm grad(mu_m))
+        D_muref = zeros(size(idx_c));
+        Dcoef   = cell(Ne,5);
 
-        mu_l = mu_ref{l};
+        for m = 1:Ne
 
-        mu_c = mu_l(idx_c);
-        mu_L = mu_l(idx_L);
-        mu_R = mu_l(idx_R);
-        mu_U = mu_l(idx_U);
-        mu_D = mu_l(idx_D);
+            Mlm = Get_Mobility_Local(PARAM,l,m,ny,nx);
 
-        D_muref = ...
-            d_C .* mu_c + d_L .* mu_L + d_R .* mu_R + d_U .* mu_U + d_D .* mu_D;
+            if ~any(Mlm(:))
+                continue
+            end
+
+            M_c  = Mlm(idx_c);
+            M_L  = Mlm(idx_L);
+            M_R  = Mlm(idx_R);
+            M_U  = Mlm(idx_U);
+            M_D  = Mlm(idx_D);
+
+            d_L = -(M_L + M_c)/2/dx2;
+            d_R = -(M_R + M_c)/2/dx2;
+            d_U = -(M_U + M_c)/2/dy2;
+            d_D = -(M_D + M_c)/2/dy2;
+            d_C = -(d_L + d_R + d_U + d_D);
+
+            Dcoef{m,1} = d_C;
+            Dcoef{m,2} = d_L;
+            Dcoef{m,3} = d_R;
+            Dcoef{m,4} = d_U;
+            Dcoef{m,5} = d_D;
+
+            mu_m = mu_ref{m};
+
+            mu_c = mu_m(idx_c);
+            mu_L = mu_m(idx_L);
+            mu_R = mu_m(idx_R);
+            mu_U = mu_m(idx_U);
+            mu_D = mu_m(idx_D);
+
+            D_muref = D_muref + ...
+                d_C .* mu_c + d_L .* mu_L + d_R .* mu_R + d_U .* mu_U + d_D .* mu_D;
+
+        end
 
         % Since A_E = 1/dt, E_ref/dt - A_E*E_ref cancels exactly.
         R(row) = -D_muref;
@@ -440,12 +475,20 @@ if use_kappa_c
                 idx_UR,idx_DR,idx_UL,idx_DL,dx2,dy2,dx4,dy4);
         end
 
-        % Diffusion block on dmu_l
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_c),d_C);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_L),d_L);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_R),d_R);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_U),d_U);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_D),d_D);
+        % Diffusion block on dmu_m.  Off-diagonal M only enters here.
+        for m = 1:Ne
+
+            if isempty(Dcoef{m,1})
+                continue
+            end
+
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_c),Dcoef{m,1});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L),Dcoef{m,2});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R),Dcoef{m,3});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U),Dcoef{m,4});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D),Dcoef{m,5});
+
+        end
 
         % A_E * chi * dmu.  In c-kappa mode only the center term remains.
         for m = 1:Ne
@@ -478,18 +521,52 @@ else
 
         row = idMu{l}(idx_c);
 
-        Ml   = PARAM.M{l};
-        M_c  = Ml(idx_c);
-        M_L  = Ml(idx_L);
-        M_R  = Ml(idx_R);
-        M_U  = Ml(idx_U);
-        M_D  = Ml(idx_D);
+        % Diagonal mobility is still used by the fourth-order kappa term.
+        Ml   = Get_Mobility_Local(PARAM,l,l,ny,nx);
 
-        d_L = -(M_L + M_c)/2/dx2;
-        d_R = -(M_R + M_c)/2/dx2;
-        d_U = -(M_U + M_c)/2/dy2;
-        d_D = -(M_D + M_c)/2/dy2;
-        d_C = -(d_L + d_R + d_U + d_D);
+        % Diffusion residual with optional off-diagonal mobility:
+        %   D_lm mu_m = -div(M_lm grad(mu_m))
+        D_muref = zeros(size(idx_c));
+        Dcoef   = cell(Ne,5);
+
+        for m = 1:Ne
+
+            Mlm = Get_Mobility_Local(PARAM,l,m,ny,nx);
+
+            if ~any(Mlm(:))
+                continue
+            end
+
+            M_c  = Mlm(idx_c);
+            M_L  = Mlm(idx_L);
+            M_R  = Mlm(idx_R);
+            M_U  = Mlm(idx_U);
+            M_D  = Mlm(idx_D);
+
+            d_L = -(M_L + M_c)/2/dx2;
+            d_R = -(M_R + M_c)/2/dx2;
+            d_U = -(M_U + M_c)/2/dy2;
+            d_D = -(M_D + M_c)/2/dy2;
+            d_C = -(d_L + d_R + d_U + d_D);
+
+            Dcoef{m,1} = d_C;
+            Dcoef{m,2} = d_L;
+            Dcoef{m,3} = d_R;
+            Dcoef{m,4} = d_U;
+            Dcoef{m,5} = d_D;
+
+            mu_m = mu_ref{m};
+
+            mu_c = mu_m(idx_c);
+            mu_L = mu_m(idx_L);
+            mu_R = mu_m(idx_R);
+            mu_U = mu_m(idx_U);
+            mu_D = mu_m(idx_D);
+
+            D_muref = D_muref + ...
+                d_C .* mu_c + d_L .* mu_L + d_R .* mu_R + d_U .* mu_U + d_D .* mu_D;
+
+        end
 
         % --------------------------------------------------------
         % A_E operator on E.
@@ -519,7 +596,6 @@ else
         a_DL = q_DL;
 
         E_l  = E_ref{l};
-        mu_l = mu_ref{l};
 
         E_c  = E_l(idx_c);
         E_L  = E_l(idx_L);
@@ -535,29 +611,28 @@ else
         E_UL = E_l(idx_UL);
         E_DL = E_l(idx_DL);
 
-        mu_c = mu_l(idx_c);
-        mu_L = mu_l(idx_L);
-        mu_R = mu_l(idx_R);
-        mu_U = mu_l(idx_U);
-        mu_D = mu_l(idx_D);
-
         AE_Eref = ...
             a_C  .* E_c  + ...
             a_L  .* E_L  + a_R  .* E_R  + a_U  .* E_U  + a_D  .* E_D  + ...
             a_L2 .* E_L2 + a_R2 .* E_R2 + a_U2 .* E_U2 + a_D2 .* E_D2 + ...
             a_UR .* E_UR + a_DR .* E_DR + a_UL .* E_UL + a_DL .* E_DL;
 
-        D_muref = ...
-            d_C .* mu_c + d_L .* mu_L + d_R .* mu_R + d_U .* mu_U + d_D .* mu_D;
-
         R(row) = E_c/dt - AE_Eref - D_muref;
 
-        % Diffusion block on dmu_l
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_c),d_C);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_L),d_L);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_R),d_R);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_U),d_U);
-        [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{l}(idx_D),d_D);
+        % Diffusion block on dmu_m.  Off-diagonal M only enters here.
+        for m = 1:Ne
+
+            if isempty(Dcoef{m,1})
+                continue
+            end
+
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_c),Dcoef{m,1});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_L),Dcoef{m,2});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_R),Dcoef{m,3});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_U),Dcoef{m,4});
+            [rows,cols,vals,k] = add_block(rows,cols,vals,k,row,idMu{m}(idx_D),Dcoef{m,5});
+
+        end
 
         % A_E * chi * dmu
         for m = 1:Ne
@@ -827,6 +902,8 @@ DIAG.maskPhi          = maskPhi;
 DIAG.use_Jphi         = ~isempty(Jphi_diag);
 DIAG.use_CS_chi       = isfield(PARAM,'use_CS_chi') && PARAM.use_CS_chi == 1;
 DIAG.use_kappa_c      = use_kappa_c;
+DIAG.use_full_M_diffusion = use_full_M;
+DIAG.full_M_kappa_diag    = use_full_M;
 DIAG.N_kappa_c       = numel(KAPC);
 if isempty(KAPC)
     DIAG.kappa_c_grains = [];
@@ -1354,6 +1431,51 @@ end
 
 end
 
+
+
+
+function tf = Is_Full_M_Local(M,Ne)
+
+tf = iscell(M) && size(M,1) >= Ne && size(M,2) >= Ne;
+
+end
+
+
+function Mlm = Get_Mobility_Local(PARAM,l,m,ny,nx)
+%GET_MOBILITY_LOCAL Return mobility field M_lm.
+%
+% Supports old diagonal format:
+%   PARAM.M{l}
+% and new full matrix format:
+%   PARAM.M{l,m}
+
+use_full_M = iscell(PARAM.M) && size(PARAM.M,1) >= l && size(PARAM.M,2) >= m && size(PARAM.M,1) > 1 && size(PARAM.M,2) > 1;
+
+if use_full_M
+
+    if size(PARAM.M,1) >= l && size(PARAM.M,2) >= m
+        Mlm = PARAM.M{l,m};
+    else
+        Mlm = [];
+    end
+
+else
+
+    if l == m
+        Mlm = PARAM.M{l};
+    else
+        Mlm = [];
+    end
+
+end
+
+if isempty(Mlm)
+    Mlm = zeros(ny,nx);
+elseif isscalar(Mlm)
+    Mlm = Mlm*ones(ny,nx);
+end
+
+end
 
 function idx = reflect_index(idx,n)
 
