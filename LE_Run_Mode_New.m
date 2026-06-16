@@ -11,13 +11,13 @@ mode       =  PARAM.LE_mode;
 p_tail     =  5e-4;
 p_full     =  2e-2;
 p_on       =  6e-3;
-p_off      =  3e-3;
+p_off      =  4e-3;
 
 %Maximal number of active phases for LE/GP
-Pmax       =  3;
+Pmax       =  4;
 
 %Local equilibrium parameters
-alpha_LE   = [0.8 0.5 0.4 0.2];
+alpha_LE   = [0.8 0.6 0.4 0.3];
 iter_LE    = [100 100 100 100];
 iter_GP    = [100 100 100 100];
 

@@ -1,8 +1,8 @@
 clear;figure(1);clf;addpath('..\bin');addpath('..\Thermo');addpath('..\Thermo\Solutions')
 
 %Pressure Temperature
-T              =  600 + 273.15;    % K
-P              =  1.5*1e9;         % Pa
+T              =  500 + 273.15;    % K
+P              =  0.7*1e9;         % Pa
 E_sc           =  1e9;             % J
 vref           =  2e-5;            % m3/mol
 
@@ -12,7 +12,6 @@ Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
 
 %Phases
 phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar','Melt'};
-% phase_all      = {'Olivine'    ,'Clinopyroxene','Orthopyroxene','Garnet','Corundum','Quartz','Corundum','Spinel','Kyanite','Andalusite','Sillimanite','Feldspar_Pen'};
 phase_short    = {'Olv'        ,'Cpx'          ,'Opx'          ,'Grt'   ,'Cor'     ,'Qtz'   ,'Cor'     ,'Spl'   ,'Kya'    ,'And'       ,'Sil'        ,'Fel'     ,'Melt'};
 
 %Noise
@@ -42,7 +41,7 @@ for ip = 1:length(phase_all)
 
     %Saver
     par                =  pars;
-    save(['Data_',phase_short{ip}],'par')
+    % save(['Data_',phase_short{ip}],'par')
 end
 
 

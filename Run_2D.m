@@ -14,19 +14,21 @@ load Map2d.mat
 PHYS.E_sc           =  E_sc;
 PHYS.t_sc           =  1;                                                   % Time scale
 PHYS.L_sc           =  1e-6;                                                % Length scale
-PHYS.l              =  3*GRID.dx/PHYS.L_sc;                                 % interface thickness (m)
-PHYS.sigma          =  0.60/(PHYS.E_sc*PHYS.L_sc);                          % surface energy (J/m^2)
-PHYS.kappa          =  0e-7/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
+PHYS.vref           =  2e-5;
+PHYS.l              =  2*GRID.dx/PHYS.L_sc;                                 % interface thickness (m)
+PHYS.sigma          =  0.50/(PHYS.E_sc*PHYS.L_sc);                          % surface energy (J/m^2)
+PHYS.kappa          =  0e-6/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
 PHYS.D_esti         =  1e-12;
 PHYS.chi_ref        =  1e-2;
 PHYS.M0             =  PHYS.D_esti*PHYS.t_sc/PHYS.L_sc^2*PHYS.chi_ref;
-PHYS.M_phs          = [PHYS.M0/100 PHYS.M0/100 PHYS.M0/100 PHYS.M0/100 PHYS.M0/100
-                       PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0
-                       PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0
-                       PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0
-                       PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0     PHYS.M0];
+sc                  =  1;
+PHYS.M_phs          = [PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0];
 
-PHYS.M_phs          = [PHYS.M0   PHYS.M0  ;  1*PHYS.M0  1*PHYS.M0   ];
+% PHYS.M_phs          = [1e-3*PHYS.M0  1e-3*PHYS.M0  ;  PHYS.M0  PHYS.M0   ];
 PHYS.m              =  6*PHYS.sigma/PHYS.l;
 PHYS.kap            =  3/4*PHYS.sigma*PHYS.l;
 PHYS.dceq           =  0.5;
@@ -34,12 +36,13 @@ PHYS.L              =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0);
 PHYS.eta            =  eta;
 
 %NUMERICS
-NUM.dt_phy          =   1e-1/PHYS.t_sc;
+NUM.dt_phy          =   5e-3/PHYS.t_sc;
 NUM.dt_max          =    1e5/PHYS.t_sc;
 NUM.dt_min          =  1e-16/PHYS.t_sc; 
 NUM.t_tot           =    1e5/PHYS.t_sc;
-NUM.dE_target       =  4e-2;
-NUM.dp_target       =  4e-2;
+NUM.t_phy           =  0;
+NUM.dE_target       =  6e-2;
+NUM.dp_target       =  6e-2;
 NUM.dmu_target      =  1e2;
 NUM.time            =  0;
 NUM.dt_good_count   =  0;
@@ -52,7 +55,7 @@ NUM.phi_mask_thick  =  3;
 NUM.norm_phi        =  1;
 NUM.cut_phi         =  0;
 NUM.norm_E          =  1;
-NUM.int_damp        =  0.5;
+NUM.int_damp        =  0.1;
 NUM.use_Jphi        =  0;
 NUM.CHLE_p_cut      =  1e-8;
 NUM.CHLE_band_thick =  16;
@@ -86,6 +89,9 @@ MODEL.dgdphi        =  @(phi) 2*PHYS.m*phi.*(phi - 1).^2 + PHYS.m*phi.^2.*(2.*ph
 MODEL.pars          =  pars;
 MODEL.p_fun         =  @(a,phi)   phi(:,:,a).^2./sum(phi.^2,3);
 MODEL.dpdphi        =  @(a,b,phi) (a==b)*2*phi(:,:,b)./sum(phi.^2,3) - 2*phi(:,:,a).*phi(:,:,b).^2./sum(phi.^2,3).^2;
+MODEL.phase_all     = {'Garnet','Clinopyroxene','Kyanite','Feldspar','Quartz'};
+MODEL.Cname         = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
+MODEL.solmod        =  'solution_models_PFM';
 
 %PARAMETERS
 PARAM.L             =  PHYS.L*ones(GRID.ny,GRID.nx);
@@ -93,25 +99,13 @@ PARAM.Lm            =  PHYS.L*PHYS.m.*ones(GRID.ny,GRID.nx);
 PARAM.LK            =  PHYS.L*PHYS.kap.*ones(GRID.ny,GRID.nx);
 PARAM.Np            =  length(STATE.c);
 PARAM.Ne            =  length(STATE.E);
-% PARAM.M             =  repmat({PHYS.M0*ones(GRID.ny,GRID.nx)},1,PARAM.Ne);
-
-for ii = 1:2
-    for jj = 1:2
-        if ii == jj
-            PARAM.M{ii,jj} = PHYS.M0*ones(GRID.ny,GRID.nx);
-        else
-            PARAM.M{ii,jj} = PHYS.M0*ones(GRID.ny,GRID.nx)*rand;
-        end
-    end
-end
-
 PARAM.kappa_phase   =  PHYS.kappa .* cellfun(@(x) size(x.n,1) > 1, pars);   % kappa nonzero automatically for phase with >1 endmembers
 PARAM.use_CS_chi    =  1;
 PARAM.CS_chi_floor  =  1e-9;
 PARAM.CS_chi_cap    =  1e-2;
 
 PARAM.use_kappa_c   =  1; 
-PARAM.L_fac         =  0.1;
+PARAM.L_fac         =  0.5;
 PARAM.LE_mode       =  'LE';
 
 %STATES
@@ -126,8 +120,14 @@ STATE.p             =  Calc_p(MODEL,STATE.phi);
 STATE.mask          =  ones(GRID.ny,GRID.nx,Np);
 STATE.LE_state      = [   ];
 
+%P-T-t path
+PARAM.PT.t_path     =  linspace(0  ,2000,100);
+PARAM.PT.T_path     =  linspace(400,400 ,100)+273.15;
+PARAM.PT.P_path     =  linspace(0.4,0.4 ,100)*1e9;
+
 %DISPLAY COMPOSITION
-% disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{4},'all') mean(STATE.E{end},'all')])
+disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{4},'all') mean(STATE.E{end},'all')])
+
 
 % % load test
 % PARAM.aniso_phase = 1;       % phase 1 is faceted solid
@@ -137,22 +137,48 @@ STATE.LE_state      = [   ];
 % PARAM.aniso_max   = 10;
 % PARAM.theta_grain = zeros(1,size(STATE.p,3));
 
-iph                        = 1;
-PARAM.aniso_phase          = 1;
-
-PARAM.facet(iph).hkl       = {'100','001'};
-PARAM.facet(iph).theta     = [0, pi/2];
-PARAM.facet(iph).A         = [1.0, 1.0];
-PARAM.facet(iph).sigma_ref = 1.0;
-PARAM.facet(iph).A_ref     = 1.0;
-PARAM.facet(iph).q         = 0.2;
-
-PARAM.aniso_min            = 1.0;
-PARAM.aniso_max            = 8.0;
-PARAM.aniso_normalize      = 1;
+% iph                        = 1;
+% PARAM.aniso_phase          = 1;
 % 
-load 1400
-NUM.dt_max          =    1e5/PHYS.t_sc;
+% % Olivine a-c section
+% % theta is the facet normal angle in the x-y model plane.
+% a_ol = 4.756;     % relative a lattice length
+% c_ol = 5.981;     % relative c lattice length
+% 
+% theta_100 = 0;
+% theta_001 = pi/2;
+% theta_101 = atan2(1/c_ol,1/a_ol);
+% 
+% PARAM.facet(iph).hkl       = {'100','101','10-1','001'};
+% PARAM.facet(iph).theta     = [theta_100, theta_101, -theta_101, theta_001];
+% 
+% % Relative target facet importance.
+% % Larger A means stronger/more persistent facet in your implementation.
+% PARAM.facet(iph).A         = [1.6, 0.4, 0.4, 0.1];
+% 
+% PARAM.facet(iph).sigma_ref = 1.0;
+% PARAM.facet(iph).A_ref     = 1.0;
+% PARAM.facet(iph).q         = 0.25;
+% 
+% PARAM.aniso_min            = 0.2;
+% PARAM.aniso_max            = 10.0;
+% PARAM.aniso_normalize      = 1;
+
+load step2
+sc                  =  2000;
+PHYS.M_phs          = [PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
+                       PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0];
+PARAM.PT.t_path     =  linspace(0  ,5e4 ,100);
+PARAM.PT.T_path     =  linspace(400,800 ,100)+273.15;
+PARAM.PT.P_path     =  linspace(0.4,1.2 ,100)*1e9;
+NUM.dt_phy          =  NUM.dt_phy/2;
+NUM.t_phy           =  0;
+TIME                = [];
+PHASE               = [];
+DTPHY               = [];
 
 for it = it:50000
     if mod(it,200)==0
@@ -164,6 +190,10 @@ for it = it:50000
     % DIRECT COUPLED SOLVER WITH MU-MATCHED E RECOVERY
     STATE_OLD            =    STATE;
     t_step               =    tic;
+
+    % UPDATE P-T THERMODYNAMICS
+    [Tcur,Pcur]          =    PT_Path(NUM.t_phy,PARAM.PT);
+    [MODEL,PARAM]        =    Update_Model_PT(MODEL,PARAM,PHYS,Tcur,Pcur);
 
     % DAMPED ETA
     PARAM.eta            =    Eta_Damping(STATE_OLD.p,PHYS.eta,NUM.int_damp*PHYS.eta);
@@ -178,14 +208,11 @@ for it = it:50000
     t                    =    tic;
     PARAM                =    Update_PF_SolverMasks(PARAM,STATE_OLD,MODEL,GRID,PHYS,NUM,'ACCH');
     
-    % UPDATE M
-    PARAM                =    Compute_M(STATE,PARAM,MODEL,PHYS);
-
-    % UPDATE L
-    PARAM                =    Compute_L(STATE,PARAM,PHYS);
+    % UPDATE M and L
+    PARAM                =    Compute_M_And_L(STATE,PARAM,MODEL,PHYS);
 
     % CALCULATE FACET
-    PARAM                =    Calc_AC_Anisotropy_FacetedStiffness(STATE_OLD,PARAM,MODEL,GRID);
+    % PARAM                =    Calc_AC_Anisotropy_FacetedStiffness(STATE_OLD,PARAM,MODEL,GRID);
 
     % Full AC + CH COUPLED PREDICTOR
     [STATE_RAW,DIAG_RAW] =    PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
@@ -222,33 +249,34 @@ for it = it:50000
         PHASE(it,iph) = mean(sum(STATE.p(:,:,grains),3),'all');
     end
 
-    % if mod(it,10)==0
-    %     disp(PHASE(end,end))
-    %     PF_Plot([3,3,1],'E1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     % PF_Plot([3,3,6],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     % PF_Plot([3,3,7],'omg34',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,8],'c11',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-    %     drawnow
-    % end
-
     if mod(it,2)==0
         disp(PHASE(end,end))
-        PF_Plot([2,3,1],'E1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([2,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([2,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([2,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([2,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        subplot(236);plot(TIME,PHASE(:,1))
+        PF_Plot([3,3,1],'E3',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,6],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        % PF_Plot([3,3,7],'omg34',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,7],'c51',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,8],'c41',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         drawnow
     end
 
+    % if mod(it,2)==0
+    %     disp(PHASE(end,end))
+    %     PF_Plot([2,3,1],'E1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+    %     PF_Plot([2,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+    %     PF_Plot([2,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+    %     PF_Plot([2,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+    %     PF_Plot([2,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+    %     subplot(236);plot(TIME,PHASE(:,1))
+    %     drawnow
+    % end
 
-    % if mod(it,10)==0
+
+    % if mod(it,5)==0
     %     disp(NUM.dt_phy)
     %     % disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') ])
     %     % disp(PHASE(end,:))
@@ -256,13 +284,11 @@ for it = it:50000
     %     % subplot(331);plot(GRID.x,STATE.E{1}(3,:),GRID.x,STATE.E{2}(3,:),GRID.x,STATE.E{3}(3,:));title('E1')
     %     subplot(331);plot(GRID.x,STATE.E{1}(3,:));title('E1')
     %     subplot(332);plot(STATE.mu_e{1}(3,:));title('mu_e')
+    %     subplot(336);plot(STATE.c{5}{1}(3,:));title('c5')
     %     subplot(333);plot(DTPHY,'b.');title('dt')
-    %     % subplot(336);plot(GRID.x,CHI');title('chi')
-    %     % subplot(334);plot(GRID.x,STATE.p(3,:,1),'.-',GRID.x,STATE.p(3,:,2),'.-',GRID.x,STATE.p(3,:,end-1),'.-',GRID.x,STATE.p(3,:,end),'.-');title('p2')        
-    %     subplot(334);plot(GRID.x,STATE.p(3,:,1),'.-',GRID.x,STATE.p(3,:,2),'.-',GRID.x,STATE.p(3,:,end-1),'.-',GRID.x,STATE.p(3,:,end),'.-');title('p2')        
-    %     % subplot(335);plot(GRID.x,STATE.omg(3,:,1)-STATE.omg(3,:,2),GRID.x,STATE.omg(3,:,end-1)-STATE.omg(3,:,end),'.-');title('domg12')
-    %     % subplot(337);plot(GRID.x,STATE.c{1}{1}(3,:),GRID.x,STATE.c{2}{1}(3,:),GRID.x,STATE.c{3}{1}(3,:));title('c11')
-    %     % subplot(339);plot(GRID.x,diff_E{1}(2,:) , GRID.x,diff_E{2}(2,:) , GRID.x,diff_E{3}(2,:));
+    %     subplot(334);plot(GRID.x,STATE.p(3,:,1),'.-',GRID.x,STATE.p(3,:,2),'.-',GRID.x,STATE.p(3,:,end-2),'.-',GRID.x,STATE.p(3,:,end-1),'.-',GRID.x,STATE.p(3,:,end),'.-');title('p2')        
+    %     subplot(335);plot(GRID.x,STATE.omg(3,:,1)-STATE.omg(3,:,2),GRID.x,STATE.omg(3,:,end-1)-STATE.omg(3,:,end),'.-');title('domg12')
+    %     subplot(337);plot(GRID.x,STATE.c{1}{1}(3,:),GRID.x,STATE.c{2}{1}(3,:),GRID.x,STATE.c{3}{1}(3,:));title('c11')
     %     subplot(338);plot(TIME,PHASE);
     %     drawnow
     % end

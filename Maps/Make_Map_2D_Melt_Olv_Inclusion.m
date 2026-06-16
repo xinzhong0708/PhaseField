@@ -6,6 +6,10 @@
 %
 % The initial phase compositions are obtained from the reference LE state
 % using the requested phase proportions.
+%
+% Grain orientation:
+%   PARAM.theta_grain(1) is the crystal orientation of grain 1.
+%   PARAM.theta_grain(2) is the matrix/melt orientation and is not used.
 
 clear; clf
 
@@ -23,7 +27,7 @@ phs_name = {'Olv','Melt'};
 % Requested phase proportions
 % phase_prop(1) is used to determine the inclusion radius when
 % incl_radius = [].
-phase_prop = [0.02 0.995];
+phase_prop = [0.01 0.995];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Inclusion controls
@@ -33,6 +37,13 @@ incl_radius       = [];              % [] means radius from phase_prop of inclus
 incl_center_real  = [];              % [] means domain center, or [x y] in meter
 incl_smooth_width = 0;               % 0 = sharp; e.g. 4*Lx/nx = smooth
 
+% Grain orientation controls
+% Grain 1 = inclusion/crystal.
+% Grain 2 = matrix/melt, orientation is not used.
+theta0 = 0.0;                         % rad
+% theta0 = pi/8;                      % example
+% theta0 = pi*rand;                   % random orientation
+
 % Initial independent endmember compositions
 c_value    = cell(1,numel(phs_name));
 c_value{1} = [0.45 0.45];            % Olv
@@ -41,8 +52,8 @@ c_value{2} = [0.35 ];                % Melt
 % Domain
 Lx = 20e-6;
 Ly = 20e-6;
-nx = 120;
-ny = 120;
+nx = 100;
+ny = 100;
 
 % Scaling / penalty
 PHYS      = struct();
@@ -196,6 +207,12 @@ grain_ID(mask_incl) = 1;
 seed_xy(1,:) = incl_center;
 seed_xy(2,:) = [NaN NaN];
 
+% Grain orientations used by Calc_AC_Anisotropy_FacetedStiffness.
+% Only crystal grain 1 matters here.
+theta_grain    = zeros(1,Ngrain);
+theta_grain(1) = theta0;
+theta_grain(2) = 0.0;
+
 phase_prop_geom = Compute_Phase_Fraction_From_Map(phase_ID,Nphase);
 phase_prop_map  = phase_prop_geom;
 map_mode        = 'incl';
@@ -203,6 +220,8 @@ map_mode        = 'incl';
 fprintf('Central %s inclusion in %s matrix\n',incl_phase_name,matrix_phase_name)
 fprintf('Inclusion radius = %.4e m\n',incl_radius_sc*L_sc)
 fprintf('Inclusion area fraction = %.8f\n',nnz(mask_incl)/numel(mask_incl))
+fprintf('Seed orientation theta0 = %.6f rad = %.3f degree\n', ...
+    theta0,theta0*180/pi)
 
 %% ========================================================================
 %  Grain-resolved MODEL
@@ -273,11 +292,12 @@ chi  = repmat({zeros(ny,nx)},Ne,Ne);
 %  PARAM and STATE
 % ========================================================================
 
-PARAM            = struct();
-PARAM.Np         = Np;
-PARAM.Ne         = Ne;
-PARAM.eta        = eta;
-PARAM.use_WScale = 0;
+PARAM              = struct();
+PARAM.Np           = Np;
+PARAM.Ne           = Ne;
+PARAM.eta          = eta;
+PARAM.use_WScale   = 0;
+PARAM.theta_grain  = theta_grain;
 
 STATE          = struct();
 STATE.c        = c;
@@ -290,6 +310,38 @@ STATE.phi      = phi;
 STATE.p        = p;
 STATE.mask     = ones(ny,nx,Np);
 STATE.LE_state = [];
+
+%% ========================================================================
+%  Completeness check before LE
+% ========================================================================
+
+if numel(MODEL.phase_index) ~= Ngrain
+    error('MODEL.phase_index length does not match Ngrain.')
+end
+
+if numel(MODEL.pars) ~= Ngrain
+    error('MODEL.pars length does not match Ngrain.')
+end
+
+if size(STATE.phi,3) ~= Ngrain
+    error('STATE.phi third dimension does not match Ngrain.')
+end
+
+if size(STATE.p,3) ~= Ngrain
+    error('STATE.p third dimension does not match Ngrain.')
+end
+
+if numel(PARAM.theta_grain) ~= Ngrain
+    error('PARAM.theta_grain length does not match Ngrain.')
+end
+
+if PARAM.Np ~= Ngrain
+    error('PARAM.Np does not match Ngrain.')
+end
+
+if PARAM.Ne ~= Ne
+    error('PARAM.Ne does not match Ne.')
+end
 
 %% ========================================================================
 %  Initial LE check
@@ -360,6 +412,31 @@ E    = STATE.E;
 p    = STATE.p;
 mu_e = STATE.mu_e;
 chi  = STATE.chi;
+phi  = STATE.phi;
+
+%% ========================================================================
+%  Completeness check before save
+% ========================================================================
+
+if ~isfield(PARAM,'theta_grain')
+    error('PARAM.theta_grain is missing.')
+end
+
+if numel(PARAM.theta_grain) ~= Ngrain
+    error('PARAM.theta_grain length does not match Ngrain before save.')
+end
+
+if ~isfield(STATE,'omg') || size(STATE.omg,3) ~= Ngrain
+    error('STATE.omg is missing or has wrong number of grains.')
+end
+
+if ~isfield(STATE,'mu_e') || numel(STATE.mu_e) ~= Ne
+    error('STATE.mu_e is missing or has wrong number of elements.')
+end
+
+if ~isfield(STATE,'chi') || size(STATE.chi,1) ~= Ne || size(STATE.chi,2) ~= Ne
+    error('STATE.chi is missing or has wrong size.')
+end
 
 %% ========================================================================
 %  Save
@@ -375,13 +452,15 @@ save('Map2d.mat', ...
     'PHYS','GRID','MODEL','PARAM','STATE', ...
     'E_sc','L_sc','eta','pars','Np','Ne','Nphase','Ngrain', ...
     'phs_name','phase_prop','phase_prop_geom','phase_prop_map', ...
-    'map_mode','grain_ID','phase_ID','grain_phase','seed_xy', ...
+    'map_mode','grain_ID','phase_ID','grain_phase','seed_xy','theta_grain','theta0', ...
     'incl_phase_name','matrix_phase_name','incl_radius','incl_center_real','incl_smooth_width', ...
     'grain_size','grain_size_real','Ngrain_user','rng_seed','periodic_map', ...
     'E_target','E_offset','E_bulk_shift','c_ref','mu_ref','omega_ref', ...
     'c','e','E','p','mu_e','chi','phi')
 
 fprintf('\nSaved Map2d.mat\n')
+fprintf('Saved PARAM.theta_grain:\n')
+disp(PARAM.theta_grain)
 
 %% ========================================================================
 %  Local helper functions

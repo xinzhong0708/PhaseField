@@ -1,26 +1,18 @@
 function PARAM = Compute_M(STATE,PARAM,MODEL,PHYS)
-%COMPUTE_M Build heterogeneous elemental mobility from phase mobilities.
+%COMPUTE_M Build heterogeneous diagonal elemental mobility from phase mobilities.
 %
-% PHYS.M_phs can be:
-%
-%   1) vector, length = Nphase:
-%        same phase mobility for all elements
-%
-%   2) matrix, Nphase x Ne:
-%        rows    = phases
-%        columns = elements
-%
-%   3) matrix, Ne x Nphase:
-%        rows    = elements
-%        columns = phases
 %
 % Phase order follows MODEL.phs_name / phase index.
 % Element order follows STATE.E / PARAM.Ne.
 %
 % At interfaces:
 %   M_e(x) = sum_phase p_phase(x) * M_phase,e
+%
+% Output:
+%   PARAM.M{ie,ie} = diagonal elemental mobility
+%   PARAM.M{ie,je} = zero for ie ~= je
 
-[ny,nx,Ngrain] = size(STATE.p);
+[ny,nx,~] = size(STATE.p);
 
 if isfield(PARAM,'Ne')
     Ne = PARAM.Ne;
@@ -43,7 +35,11 @@ Mraw = PHYS.M_phs;
 % ------------------------------------------------------------
 % Interpret PHYS.M_phs
 % ------------------------------------------------------------
-if isvector(Mraw)
+if isscalar(Mraw)
+
+    M_phase_elem = Mraw*ones(Nphase,Ne);
+
+elseif isvector(Mraw)
 
     Mraw = Mraw(:);
 
@@ -69,7 +65,7 @@ else
 
     else
 
-        error('Compute_M: PHYS.M_phs must be Nphase x Ne or Ne x Nphase.')
+        error('Compute_M: PHYS.M_phs must be scalar, Nphase x Ne, or Ne x Nphase.')
 
     end
 end
@@ -91,10 +87,21 @@ end
 psum = sum(p_phase,3);
 
 % ------------------------------------------------------------
-% Build one mobility field for each element
+% Allocate full elemental mobility matrix
 % ------------------------------------------------------------
-PARAM.M = cell(1,Ne);
+PARAM.M = cell(Ne,Ne);
 
+for ie = 1:Ne
+    for je = 1:Ne
+        PARAM.M{ie,je} = zeros(ny,nx);
+    end
+end
+
+PARAM.M_diag = cell(1,Ne);
+
+% ------------------------------------------------------------
+% Build diagonal mobility field for each element
+% ------------------------------------------------------------
 for ie = 1:Ne
 
     Mgrid = zeros(ny,nx);
@@ -105,12 +112,17 @@ for ie = 1:Ne
 
     % Safe normalization, usually psum is already 1
     mask = psum > eps;
+
     Mtmp = Mgrid;
     Mtmp(mask)  = Mgrid(mask)./psum(mask);
     Mtmp(~mask) = mean(M_phase_elem(:,ie));
 
-    PARAM.M{ie} = Mtmp;
+    PARAM.M{ie,ie}  = Mtmp;
+    PARAM.M_diag{ie} = Mtmp;
 
 end
+
+% Store phase-element mobility table for diagnostics
+PARAM.M_phase_elem = M_phase_elem;
 
 end

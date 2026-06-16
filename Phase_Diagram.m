@@ -1,16 +1,16 @@
 clear
 addpath ./ ./Thermo/Utilities/ ./Thermo/Solutions/ ./EOS ./glpkmex
 
-T             = linspace(900, 900,1) + 273.15;
-P             = linspace(1.5 ,1.5,1) * 1e9;
+T             = linspace(400  , 400,1) + 273.15;
+P             = linspace(0.40 ,0.40,1) * 1e9;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'      'Ca'      'Al'      'Na'    'Si'    'O'};
-Nsys          = [0.1472    0.1993    0.0300    0.0777    0.0282];
+Nsys          = [0.0731    0.1314    0.0318    0.1767    0.0290];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 %Choose phases considered in Gibbs minimization
-phs_name      = {'Garnet','Olivine','Clinopyroxene','Feldspar','Quartz'};
+phs_name      = {'Garnet','Kyanite','Clinopyroxene','Feldspar','Quartz'};
 % phs_name      = {'Garnet','Olivine','Clinopyroxene'};
 td            =  init_thermo(phs_name,Cname,solmod);
 p             =  props_generate(td);     % generate endmember proportions

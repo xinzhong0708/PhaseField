@@ -3,6 +3,24 @@ function [STATE,NUM,DIAG] = Update_TimeStep_Soft(STATE,STATE_T,PARAM,MODEL,NUM)
 
 dt_try = NUM.dt_phy;
 
+% ------------------------------------------------------------
+% Current physical time
+% ------------------------------------------------------------
+if ~isfield(NUM,'t_phy') || isempty(NUM.t_phy)
+    if isfield(NUM,'time') && ~isempty(NUM.time)
+        NUM.t_phy = NUM.time;
+    else
+        NUM.t_phy = 0;
+    end
+end
+
+if ~isfield(NUM,'time') || isempty(NUM.time)
+    NUM.time = NUM.t_phy;
+end
+
+t_old   = NUM.t_phy;
+t_trial = t_old + dt_try;
+
 %Final LE correction before timestep decision
 % STATE_C = LE_Run(STATE_T,PARAM,MODEL);
 STATE_C = STATE_T;
@@ -35,9 +53,9 @@ if reject_step
 
     dt_next = max(dt_try*NUM.dt_shrink_fac,NUM.dt_min);
     NUM.dt_good_count = 0;
-    % disp('Reject')
+
 else
-    % disp('Accept')
+
     if err < NUM.err_grow
         NUM.dt_good_count = NUM.dt_good_count + 1;
     else
@@ -67,49 +85,44 @@ DIAG.dt_next     = dt_next;
 DIAG.accept      = ~reject_step;
 DIAG.hard_bad_mu = hard_bad_mu;
 
+DIAG.t_old       = t_old;
+DIAG.t_trial     = t_trial;
+
 %Accept or reject
 if reject_step
-
-    %Reject: keep accepted STATE unchanged
+    %Reject: keep accepted STATE and physical time unchanged
+    NUM.t_phy = t_old;
+    NUM.time  = t_old;
     NUM.dt_phy = dt_next;
-
+    DIAG.t_new = t_old;
 else
-
-    %Accept final LE-corrected state
+    %Accept final LE-corrected state and advance physical time
     STATE      = STATE_C;
-    NUM.time   = NUM.time + dt_try;
+    NUM.t_phy  = t_old + dt_try;
+    NUM.time   = NUM.t_phy;
     NUM.dt_phy = dt_next;
-
+    DIAG.t_new = NUM.t_phy;
 end
 
 end
 
 
 function d = Max_Cell_Diff(A,B)
-
 d = 0;
-
 for i = 1:numel(A)
-
     diff_i = abs(A{i}(:) - B{i}(:));
-
     if any(~isfinite(diff_i))
         d = inf;
         return
     end
-
     d = max(d,max(diff_i));
-
 end
-
 end
 
 
 function val = Robust_Max(A,q)
-
 a = abs(A(:));
 a = a(isfinite(a));
-
 if isempty(a)
     val = inf;
     return

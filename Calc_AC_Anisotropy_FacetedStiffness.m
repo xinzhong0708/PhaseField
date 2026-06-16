@@ -32,7 +32,7 @@ function PARAM = Calc_AC_Anisotropy_FacetedStiffness(STATE,PARAM,MODEL,GRID)
 %
 % Optional general facet table:
 %   PARAM.facet(iph).theta      = [0 pi/3 2*pi/3 ...];  % facet normals
-%   PARAM.facet(iph).A          = [1 1 1 ...];           % facet areas
+%   PARAM.facet(iph).A          = [1 1 1 ...];          % facet areas
 %   PARAM.facet(iph).sigma_ref  = 1;
 %   PARAM.facet(iph).A_ref      = 1;
 %   PARAM.facet(iph).q          = 0.4;
