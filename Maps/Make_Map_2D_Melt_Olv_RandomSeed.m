@@ -372,6 +372,7 @@ MODEL             = struct();
 MODEL.phs_name    = phs_name;
 MODEL.phase_index = grain_phase(:).';
 MODEL.pars        = pars_phase(MODEL.phase_index);
+MODEL.eta         = eta0;
 
 % Full thermo information for on-the-fly P-T update
 MODEL.Cname       = Cname;

@@ -1,317 +1,574 @@
-function [c,mu_e,chi,DIAG] = LE_Calculator(pars,p,c,E,eta,level)
-%LE_CALCULATOR Spinodal-preserving projected local-equilibrium calculator.
+function [c,mu_e,chi] = LE_Calculator(pars,p,c,E,eta,level)
+%LE_CALCULATOR Local equilibrium with damped Newton/Picard update.
 %
-% Drop-in replacement for the LE_Calculator used by LE_Run.
-% External input/output structure is unchanged:
-%   [c,mu_e,chi] = LE_Calculator(pars,p,c,E,eta,level)
+% Drop-in accelerated version.
 %
-% Main change relative to PFM_Update3:
-%   - The thermodynamic response used in the common-mu projection is the
-%     physical R.chi returned by PhaseThermo. It is NOT made positive
-%     definite. Therefore negative susceptibility in a spinodal region is
-%     retained and returned to the CH solver.
-%   - Composition updates are performed by remapping target elemental
-%     composition through R.Jac (de/dc), not by using a convexified H_c.
-%   - Globalization is based on reduction of the LE residual, not decrease
-%     of local Gibbs energy. A spinodal state is not a local Gibbs minimum,
-%     so an energy-decrease line search would suppress the instability.
+% Main speedups compared with the original:
+%   1) PhaseThermo values from the quadratic step are reused to build F_old.
+%   2) Regularized Hessians are built once per phase per iteration and reused.
+%   3) Line-search energy is evaluated only on nodes that are still undecided.
+%   4) Hessian regularization uses pageeig when available, with loop fallback.
 %
-% Equations used at each projection iteration:
-%   S_ip       = d e_ip / d mu = R_ip.chi          (may be indefinite)
-%   chi_eff    = I/eta + sum_ip p_ip * S_ip        (may be indefinite)
-%   e_ip(mu)   = e_ip^0 + S_ip*(mu - mu_ip^0)
-%   E          = mu/eta + sum_ip p_ip*e_ip(mu)
-%
-% The last equation is solved for the common mu, and each target e_ip is
-% remapped back to c_ip through the kinematic Jacobian J_ip = de_ip/dc_ip.
-%
-% IMPORTANT:
-%   This allows spinodal chi to reach PF_Coupled_ACCH_LETangent. The CH
-%   step must include nonzero kappa and may need a restricted timestep.
+% Optional level entries:
+%   level = [alpha, Miter]
+%   level = [alpha, Miter, c_tol, MaxLS, lam_c]
+
+%Prepare
+c_init       =  c;
+Np           =  length(c);
+Ne           =  length(E);
+N            =  numel(E{1});
+alpha        =  level(1);
+Miter        =  level(2);
+c_tol        =  1e-6;
+
+%Line-search & damping parameters
+MaxLS        =  10;
+amin         =  1e-7;
+energy_tol   =  1e-9;
+lam_c        =  1e-5;
+
+if numel(level) >= 3 && ~isempty(level(3))
+    c_tol = level(3);
+end
+if numel(level) >= 4 && ~isempty(level(4))
+    MaxLS = level(4);
+end
+if numel(level) >= 5 && ~isempty(level(5))
+    lam_c = level(5);
+end
+
+%Check whether any phase has internal composition degrees of freedom
+has_dof      =  false(1,Np);
+for ip = 1:Np
+    R0          =   PhaseThermo(pars{ip}, c{ip});
+    has_dof(ip) = ~(isempty(R0.mu_c) || isempty(R0.H_c) || isempty(R0.Jac));
+end
+
+%If all phases are pure/no-DOF phases, no c-iteration is needed
+if ~any(has_dof)
+    [~,mu_mat,chi_page] = LE_Quadratic_Step_Fast(pars,p,c,E,eta,0,0);
+    mu_e = CellFromMat_Local(mu_mat,Ne);
+    chi  = CellFromPage_Local(chi_page,Ne);
+    return
+end
 
 % -------------------------------------------------------------------------
-% Settings and sizes
+% Non-recursive damping schedule.
+% If the original alpha fails, retry with smaller alpha, but never call
+% LE_Calculator recursively. If all stages fail, preserve c_init.
 % -------------------------------------------------------------------------
-Np        = numel(c);
-Ne        = numel(E);
-N         = numel(E{1});
-alpha     = level(1);
-Miter     = level(2);
-c_tol     = 1e-7;
-res_tol   = 1e-7;
-MaxLS     = 10;
-amin      = 1e-8;
-accept_eps= 1e-12;
+alpha_stage0 = [alpha, min(alpha,0.3), min(alpha,0.1), min(alpha,0.03)];
+alpha_stage  = [];
 
-DIAG.converged     = false;
-DIAG.iter          = 0;
-DIAG.max_res       = inf;
-DIAG.min_chi_eig   = nan;
-DIAG.failed_nodes  = [];
+for ia = 1:numel(alpha_stage0)
+    if alpha_stage0(ia) > 0 && ~any(abs(alpha_stage-alpha_stage0(ia)) < eps)
+        alpha_stage(end+1) = alpha_stage0(ia); %#ok<AGROW>
+    end
+end
 
-% -------------------------------------------------------------------------
-% Projection / Newton iteration
-% -------------------------------------------------------------------------
-for it = 1:Miter
+converged_all = false;
 
-    c_old = c;
+for istage = 1:numel(alpha_stage)
 
-    % Physical signed local tangent and projected common chemical potential
-    [e_tar,mu_old,chi_old,R_old] = LE_Physical_Projection(pars,p,c_old,E,eta);
-    res_old = LE_Residual(R_old,p,E,eta,mu_old);
+    alpha_now = alpha_stage(istage);
 
-    % Map target elemental compositions to composition increments.
-    % This uses only de/dc and does not alter spinodal curvature.
-    dc_all = Map_TargetE_To_c_Step(c_old,R_old,e_tar);
-    dcmax  = MaxAbsStep(dc_all);
-
-    if max(res_old) < res_tol || dcmax < c_tol
-        DIAG.converged = max(res_old) < res_tol;
-        DIAG.iter      = it - 1;
-        break
+    if istage == numel(alpha_stage)
+        Miter_now = max(Miter,300);
+    else
+        Miter_now = Miter;
     end
 
-    % Residual-decreasing, nodewise line search. Do NOT minimize G here:
-    % spinodal compositions are allowed to be locally unstable.
-    good_node = false(1,N);
-    alpha_try = alpha * ones(1,N);
-    alpha_acc = zeros(1,N);
+    % Always restart from the input c for a smaller-alpha retry.
+    % This avoids carrying a bad partially converged branch.
+    c = c_init;
 
-    for ils = 1:MaxLS
-        c_try = AddStep(c_old,dc_all,alpha_try);
+    converged_stage = false;
+    failed_stage    = false;
 
-        try
-            [~,mu_try,~,R_try] = LE_Physical_Projection(pars,p,c_try,E,eta);
-            res_try = LE_Residual(R_try,p,E,eta,mu_try);
-            good = isfinite(res_try) & ...
-                   (res_try <= res_old .* (1 + 1e-10) + accept_eps);
-        catch
-            good = false(1,N);
-        end
+    %Picard/Newton iteration with globalization
+    for it = 1:Miter_now
 
-        good_new            = good & ~good_node;
-        alpha_acc(good_new) = alpha_try(good_new);
-        good_node(good_new) = true;
+        %Save old c
+        c_old      = c;
 
-        bad = ~good_node;
-        alpha_try(bad) = 0.2 * alpha_try(bad);
+        %Analytical solution of local quadratic model.
+        %F_old is built from the same PhaseThermo calls, avoiding one
+        %extra full LE_Objective call per iteration.
+        [dc_all,~,~,F_old] = LE_Quadratic_Step_Fast(pars,p,c_old,E,eta,lam_c,1);
 
-        if all(good_node | alpha_try < amin)
+        %If proposed step is essentially zero, stop
+        dcmax      = MaxAbsStep(dc_all);
+        if dcmax < c_tol
+            converged_stage = true;
             break
         end
+
+        %Nodewise step size, used to detect unresolved bad nodes
+        dcnode     = MaxAbsStepNode(dc_all,N);
+
+        %Backtracking line search, independently for each grid point
+        good_node  = false(1,N);
+        alpha_try  = alpha_now*ones(1,N);
+        alpha_acc  = zeros(1,N);
+
+        %Line search
+        for ils = 1:MaxLS
+
+            bad = ~good_node & alpha_try >= amin;
+
+            if ~any(bad)
+                break
+            end
+
+            %Add c trial for all nodes. This is cheap relative to PhaseThermo.
+            c_try = AddStep(c_old,dc_all,alpha_try);
+
+            %Evaluate objective only on nodes still in the line search.
+            F_try_bad = LE_Objective_Mask(pars,p,c_try,E,eta,bad);
+
+            good_bad = isfinite(F_try_bad) & ...
+                (F_try_bad <= F_old(bad) + energy_tol.*max(1,abs(F_old(bad))));
+
+            bad_ids  = find(bad);
+            good_ids = bad_ids(good_bad);
+            fail_ids = bad_ids(~good_bad);
+
+            alpha_acc(good_ids) = alpha_try(good_ids);
+            good_node(good_ids) = true;
+
+            alpha_try(fail_ids) = 0.2 * alpha_try(fail_ids);
+
+            if all(good_node | alpha_try < amin)
+                break
+            end
+        end
+
+        %If no node accepts the step, this alpha stage failed
+        if ~any(good_node)
+            failed_stage = true;
+            break
+        end
+
+        %Update only accepted nodes. Unaccepted nodes get alpha = 0.
+        c = AddStep(c_old,dc_all,alpha_acc);
+
+        %Check whether large-step nodes failed the line search
+        bad_large = any((~good_node) & (dcnode > c_tol));
+
+        %Check convergence
+        cchg = 0;
+        for ip = 1:Np
+            if ~has_dof(ip)
+                continue
+            end
+            for ic = 1:length(c{ip})
+                cchg = max(cchg, max(abs(c{ip}{ic} - c_old{ip}{ic})));
+            end
+        end
+
+        %Jump out if tolerance is satisfied and no large failed nodes remain
+        if cchg < c_tol && ~bad_large
+            converged_stage = true;
+            break
+        end
+
+        %If this stage reaches the end, mark it as failed
+        if it == Miter_now
+            failed_stage = true;
+        end
     end
 
-    if ~any(good_node)
-        % Return the last finite iterate, with diagnostics instead of
-        % silently reporting false convergence.
-        DIAG.iter         = it;
-        DIAG.max_res      = max(res_old);
-        DIAG.failed_nodes = find(~good_node);
+    if converged_stage
+        converged_all = true;
         break
     end
 
-    c = AddStep(c_old,dc_all,alpha_acc);
-    DIAG.iter = it;
-
-    if it == Miter
-        % Retain previous fallback style, but remain in signed-chi mode.
-        if alpha > 0.05
-            level(1) = 0.05;
-            [c,mu_e,chi,DIAG] = LE_Calculator(pars,p,c,E,eta,level);
-            return
-        end
+    if failed_stage && istage < numel(alpha_stage)
+        fprintf('LE_Calculator: retry with smaller alpha = %.3e\n',alpha_stage(istage+1));
     end
 end
 
-% -------------------------------------------------------------------------
-% Final physical signed response returned to CH
-% -------------------------------------------------------------------------
-[~,mu_mat,chi_page,R_final] = LE_Physical_Projection(pars,p,c,E,eta);
-res_final = LE_Residual(R_final,p,E,eta,mu_mat);
-
-for ie = 1:Ne
-    mu_e{ie} = mu_mat(ie,:);
-end
-for i = 1:Ne
-    for j = 1:Ne
-        chi{i,j} = reshape(chi_page(i,j,:),1,[]);
-    end
+%If all stages fail, preserve previous input composition.
+%This prevents infinite recursion and avoids accepting a bad partial branch.
+if ~converged_all
+    disp('LE_Calculator: not converged after damping retries, preserving input c.')
+    c = c_init;
 end
 
-DIAG.max_res      = max(res_final);
-DIAG.converged    = DIAG.max_res < res_tol;
-DIAG.failed_nodes = find(res_final >= res_tol);
-DIAG.min_chi_eig  = MinPageEigenvalue(chi_page);
+%Recalculate final mu_e and original chi at accepted c.
+%The iteration above still uses the regularized Hessian.
+%Only the returned chi is computed from the raw thermodynamic Hessian.
+try
+    [~,mu_mat,chi_page] = LE_Quadratic_Step_OriginalChi(pars,p,c,E,eta);
+catch
+    disp('LE_Calculator: raw chi failed, returning regularized chi.')
+    [~,mu_mat,chi_page] = LE_Quadratic_Step_Fast(pars,p,c,E,eta,lam_c,0);
+end
+
+%If raw chi produced non-finite values, fall back to regularized chi.
+if any(~isfinite(mu_mat(:))) || any(~isfinite(chi_page(:)))
+    disp('LE_Calculator: non-finite raw response, returning regularized chi.')
+    [~,mu_mat,chi_page] = LE_Quadratic_Step_Fast(pars,p,c,E,eta,lam_c,0);
+end
+
+%Diffusion potential and susceptibility
+mu_e = CellFromMat_Local(mu_mat,Ne);
+chi  = CellFromPage_Local(chi_page,Ne);
 
 end
 
-
-% =========================================================================
-% Physical signed LE projection: this is the key spinodal-preserving part.
-% =========================================================================
-function [e_tar,mu_mat,chi_page,R] = LE_Physical_Projection(pars,p,c,E,eta)
-
-Np    = numel(c);
-Ne    = numel(E);
-N     = numel(E{1});
-E_mat = cell2mat(E(:));
-
+%This is the core quadratic solver for the LE
+function [dc_all,mu_mat,chi_page,F] = LE_Quadratic_Step_Fast(pars,p,c,E,eta,lam_c,need_F)
+%Prepare
+Np         = length(c);
+Ne         = length(E);
+N          = numel(E{1});
+E_mat      = cell2mat(E(:));
 if isscalar(eta)
     eta_vec = eta * ones(1,N);
 else
     eta_vec = eta(:).';
 end
 
-Bmix  = zeros(Ne,N);
-Cmix  = zeros(Ne,Ne,N);
-e_tar = cell(Np,1);
-R     = cell(Np,1);
-S     = cell(Np,1);
-mu_ref= cell(Np,1);
-e_ref = cell(Np,1);
+%Initialize step
+for ip = 1:Np
+    for ic = 1:length(c{ip})
+        dc_all{ip}{ic} = zeros(size(c{ip}{ic})); %#ok<AGROW>
+    end
+end
+
+%Prepare thermodynamic for each phase
+R     = cell(1,Np);
+Hreg  = cell(1,Np);
+Bmix  = zeros(Ne, N);
+Cmix  = zeros(Ne, Ne, N);
+
+if need_F
+    Gmix = zeros(1,N);
+    Emix = zeros(Ne,N);
+end
 
 for ip = 1:Np
-    R{ip}   = PhaseThermo(pars{ip},c{ip});
-    e_ref{ip} = cell2mat(R{ip}.e(:));
-    p_ip    = reshape(p(:,:,ip),1,N);
 
-    if isempty(R{ip}.mu_e) || isempty(R{ip}.chi) || isempty(R{ip}.Jac)
-        % Pure/no-DOF phase: fixed elemental composition, zero response.
-        S{ip}      = zeros(Ne,Ne,N);
-        mu_ref{ip} = zeros(Ne,N);
-        B_phase    = e_ref{ip};
-    else
-        % PHYSICAL thermodynamic response. Do not regularize it positive.
-        S{ip}      = 0.5 * (R{ip}.chi + permute(R{ip}.chi,[2 1 3]));
-        mu_ref{ip} = cell2mat(R{ip}.mu_e(:));
+    R{ip} = PhaseThermo(pars{ip}, c{ip});
 
-        Smu3       = pagemtimes(S{ip},reshape(mu_ref{ip},Ne,1,N));
-        Smu        = reshape(Smu3,Ne,N);
-        B_phase    = e_ref{ip} - Smu;
+    e_ref = cell2mat(R{ip}.e(:));
+    p_ip  = reshape(p(:,:,ip), 1, N);
+
+    if need_F
+        Gmix = Gmix + p_ip .* R{ip}.g(:).';
+        Emix = Emix + e_ref .* p_ip;
     end
 
+    %Pure phase with no internal DOF
+    if isempty(R{ip}.mu_c) || isempty(R{ip}.H_c) || isempty(R{ip}.Jac)
+        B_phase  = e_ref;
+        C_phase  = zeros(Ne, Ne, N);
+    else
+        %Normal phases
+        mu_c     = cell2mat(R{ip}.mu_c(:));
+        Hc       = R{ip}.H_c;
+        J        = R{ip}.Jac;
+        Nc       = size(mu_c,1);
+
+        %Regularized positive definite Hessian, cached for the dc update
+        Hreg{ip} = RegularizeHessian(Hc,lam_c);
+
+        %H^{-1} * mu_c
+        Hinv_mu3 = pagemldivide(Hreg{ip}, reshape(mu_c, Nc, 1, N));
+        Hinv_mu  = reshape(Hinv_mu3, Nc, N);
+
+        %H^{-1} * J^T
+        JT       = permute(J, [2 1 3]);
+        Hinv_JT  = pagemldivide(Hreg{ip}, JT);
+
+        %B = e - J H^{-1} mu_c
+        JHinvmu3 = pagemtimes(J, reshape(Hinv_mu, Nc, 1, N));
+        JHinvmu  = reshape(JHinvmu3, Ne, N);
+        B_phase  = e_ref - JHinvmu;
+
+        %C = J H^{-1} J^T
+        C_phase  = pagemtimes(J, Hinv_JT);
+    end
+
+    %Add Bmix and Cmix
     Bmix = Bmix + B_phase .* p_ip;
-    Cmix = Cmix + S{ip} .* reshape(p_ip,1,1,N);
+    Cmix = Cmix + C_phase .* reshape(p_ip, 1, 1, N);
 end
 
-Ipages    = repmat(eye(Ne),1,1,N);
-chi_page  = Cmix + Ipages .* reshape(1 ./ eta_vec,1,1,N);
-rhs       = E_mat - Bmix;
-mu3       = pagemldivide(chi_page,reshape(rhs,Ne,1,N));
-mu_mat    = reshape(mu3,Ne,N);
+%Calculate mu_e = (I/eta + Cmix)^(-1) * (E - Bmix)
+IpagesE  = repmat(eye(Ne), 1, 1, N);
+chi_page = Cmix + IpagesE .* reshape(1 ./ eta_vec, 1, 1, N);
+rhs      = E_mat - Bmix;
+mu3      = pagemldivide(chi_page, reshape(rhs, Ne, 1, N));
+mu_mat   = reshape(mu3, Ne, N);
 
+if need_F
+    res = E_mat - Emix;
+    F   = Gmix + 0.5 * eta_vec .* sum(res.^2,1);
+else
+    F   = [];
+end
+
+%Calculate dc = H^{-1}(J^T mu_e - mu_c)
 for ip = 1:Np
-    if isempty(R{ip}.mu_e) || isempty(R{ip}.chi) || isempty(R{ip}.Jac)
-        e_tar{ip} = e_ref{ip};
-    else
-        dmu3      = reshape(mu_mat - mu_ref{ip},Ne,1,N);
-        de3       = pagemtimes(S{ip},dmu3);
-        e_tar{ip} = e_ref{ip} + reshape(de3,Ne,N);
-    end
-end
 
-end
-
-
-% =========================================================================
-% Convert projected target elemental compositions to dc using de/dc only.
-% =========================================================================
-function dc_all = Map_TargetE_To_c_Step(c,R,e_tar)
-
-Np = numel(c);
-N  = numel(c{1}{1});
-dc_all = c;
-
-for ip = 1:Np
-    for ic = 1:numel(c{ip})
-        dc_all{ip}{ic} = zeros(size(c{ip}{ic}));
-    end
-
-    if isempty(R{ip}.Jac)
+    %If pure phase, no need to update c
+    if isempty(R{ip}.mu_c) || isempty(R{ip}.H_c) || isempty(R{ip}.Jac)
         continue
     end
 
-    e_ref = cell2mat(R{ip}.e(:));
-    de    = e_tar{ip} - e_ref;
-    J     = R{ip}.Jac;                 % Ne x Nc x N = de/dc
-    Nc    = size(J,2);
+    mu_c    = cell2mat(R{ip}.mu_c(:));
+    J       = R{ip}.Jac;
+    Nc      = size(mu_c,1);
+    JT      = permute(J, [2 1 3]);
+    JTmu3   = pagemtimes(JT, reshape(mu_mat, Ne, 1, N));
+    JTmu    = reshape(JTmu3, Nc, N);
+    rhs_dc  = JTmu - mu_c;
+    dc3     = pagemldivide(Hreg{ip}, reshape(rhs_dc, Nc, 1, N));
+    dc      = reshape(dc3, Nc, N);
 
-    dc3   = pagemldivide(J,reshape(de,size(de,1),1,N));
-    dc    = reshape(dc3,Nc,N);
-
-    for ic = 1:numel(c{ip})
+    for ic = 1:length(c{ip})
         dc_all{ip}{ic} = dc(ic,:);
     end
 end
-
 end
 
-
-% =========================================================================
-% Residual of the finite-eta local-equilibrium equations.
-% =========================================================================
-function res = LE_Residual(R,p,E,eta,mu_mat)
-
-Np    = numel(R);
-Ne    = numel(E);
-N     = numel(E{1});
-E_mat = cell2mat(E(:));
-
+%This is the final-response solver for original thermodynamic chi
+function [dc_all,mu_mat,chi_page] = LE_Quadratic_Step_OriginalChi(pars,p,c,E,eta)
+%Prepare
+Np         = length(c);
+Ne         = length(E);
+N          = numel(E{1});
+E_mat      = cell2mat(E(:));
 if isscalar(eta)
     eta_vec = eta * ones(1,N);
 else
     eta_vec = eta(:).';
 end
 
-Emix = zeros(Ne,N);
-res  = zeros(1,N);
+%Initialize step
+for ip = 1:Np
+    for ic = 1:length(c{ip})
+        dc_all{ip}{ic} = zeros(size(c{ip}{ic})); %#ok<AGROW>
+    end
+end
+
+%Prepare thermodynamic for each phase
+R = cell(1,Np);
+for ip = 1:Np
+    R{ip} = PhaseThermo(pars{ip}, c{ip});
+end
+
+%Calculate Bmix and Cmix
+Bmix      = zeros(Ne, N);
+Cmix      = zeros(Ne, Ne, N);
 
 for ip = 1:Np
-    p_ip = reshape(p(:,:,ip),1,N);
-    e_ip = cell2mat(R{ip}.e(:));
-    Emix = Emix + e_ip .* p_ip;
 
-    if ~isempty(R{ip}.mu_e) && ~isempty(R{ip}.Jac)
-        mu_ip = cell2mat(R{ip}.mu_e(:));
-        r_ip  = max(abs(mu_ip - mu_mat),[],1);
-        active = p_ip > 1e-14;
-        r_ip(~active) = 0;
-        res = max(res,r_ip);
+    e_ref = cell2mat(R{ip}.e(:));
+    p_ip  = reshape(p(:,:,ip), 1, N);
+
+    if isempty(R{ip}.mu_c) || isempty(R{ip}.H_c) || isempty(R{ip}.Jac)
+        B_phase  = e_ref;
+        C_phase  = zeros(Ne, Ne, N);
+    else
+        mu_c     = cell2mat(R{ip}.mu_c(:));
+        Hc       = R{ip}.H_c;
+        J        = R{ip}.Jac;
+        Nc       = size(mu_c,1);
+        Hreg     = SymHessian(Hc);
+        Hinv_mu3 = pagemldivide(Hreg, reshape(mu_c, Nc, 1, N));
+        Hinv_mu  = reshape(Hinv_mu3, Nc, N);
+        JT       = permute(J, [2 1 3]);
+        Hinv_JT  = pagemldivide(Hreg, JT);
+        JHinvmu3 = pagemtimes(J, reshape(Hinv_mu, Nc, 1, N));
+        JHinvmu  = reshape(JHinvmu3, Ne, N);
+        B_phase  = e_ref - JHinvmu;
+        C_phase  = pagemtimes(J, Hinv_JT);
+    end
+
+    Bmix = Bmix + B_phase .* p_ip;
+    Cmix = Cmix + C_phase .* reshape(p_ip, 1, 1, N);
+end
+
+IpagesE  = repmat(eye(Ne), 1, 1, N);
+chi_page = Cmix + IpagesE .* reshape(1 ./ eta_vec, 1, 1, N);
+rhs      = E_mat - Bmix;
+mu3      = pagemldivide(chi_page, reshape(rhs, Ne, 1, N));
+mu_mat   = reshape(mu3, Ne, N);
+
+for ip = 1:Np
+
+    if isempty(R{ip}.mu_c) || isempty(R{ip}.H_c) || isempty(R{ip}.Jac)
+        continue
+    end
+
+    mu_c    = cell2mat(R{ip}.mu_c(:));
+    Hc      = R{ip}.H_c;
+    J       = R{ip}.Jac;
+    Nc      = size(mu_c,1);
+    Hreg    = SymHessian(Hc);
+    JT      = permute(J, [2 1 3]);
+    JTmu3   = pagemtimes(JT, reshape(mu_mat, Ne, 1, N));
+    JTmu    = reshape(JTmu3, Nc, N);
+    rhs_dc  = JTmu - mu_c;
+    dc3     = pagemldivide(Hreg, reshape(rhs_dc, Nc, 1, N));
+    dc      = reshape(dc3, Nc, N);
+
+    for ic = 1:length(c{ip})
+        dc_all{ip}{ic} = dc(ic,:);
     end
 end
-
-% finite-eta relation: mu = eta * (E - sum p e)
-mu_pen = (E_mat - Emix) .* eta_vec;
-res    = max(res,max(abs(mu_pen - mu_mat),[],1));
-
 end
 
+%Evaluate the penalized energy only on selected nodes
+function F = LE_Objective_Mask(pars,p,c,E,eta,mask)
 
+Np    = length(c);
+Ne    = length(E);
+Nloc  = nnz(mask);
+
+if Nloc == 0
+    F = zeros(1,0);
+    return
+end
+
+E_mat = cell2mat(E(:));
+E_mat = E_mat(:,mask);
+
+if isscalar(eta)
+    eta_vec = eta * ones(1,Nloc);
+else
+    eta_vec = eta(:).';
+    eta_vec = eta_vec(mask);
+end
+
+Gmix  = zeros(1,Nloc);
+Emix  = zeros(Ne,Nloc);
+
+try
+    for ip = 1:Np
+
+        c_ip = c{ip};
+        c_m  = cell(size(c_ip));
+
+        for ic = 1:numel(c_ip)
+            c_m{ic} = reshape(c_ip{ic},1,[]);
+            c_m{ic} = c_m{ic}(mask);
+        end
+
+        R    = PhaseThermo(pars{ip}, c_m);
+        g    = R.g(:).';
+        e    = cell2mat(R.e(:));
+        p_ip = reshape(p(:,:,ip),1,[]);
+        p_ip = p_ip(mask);
+
+        Gmix = Gmix + p_ip .* g;
+        Emix = Emix + e .* p_ip;
+    end
+
+    res = E_mat - Emix;
+    F   = Gmix + 0.5 * eta_vec .* sum(res.^2,1);
+catch
+    F   = inf(1,Nloc);
+end
+end
+
+%This function only symmetrizes Hessian and keeps the original curvature.
+function Hs = SymHessian(Hc)
+Hs = 0.5*(Hc + permute(Hc,[2 1 3]));
+end
+
+%This function regularize Hessian by adding a ridge and making it symmetric
+function Hreg = RegularizeHessian(Hc,lam_c)
+
+[Nc,~,N] = size(Hc);
+Hs       = 0.5*(Hc + permute(Hc,[2 1 3]));
+
+%Fast page-wise path. If pageeig is unavailable, use the loop fallback.
+try
+    [V,D] = pageeig(Hs);
+
+    lam = zeros(Nc,N);
+    for i = 1:Nc
+        lam(i,:) = reshape(D(i,i,:),1,N);
+    end
+
+    scale = sqrt(reshape(sum(sum(Hs.^2,1),2),1,N))/max(1,Nc);
+    scale = max(1,scale);
+
+    evmin = min(lam,[],1);
+    shift = max(0,1e-10*scale - evmin);
+
+    lam_use = lam + shift + lam_c*scale;
+
+    Duse = zeros(Nc,Nc,N);
+    for i = 1:Nc
+        Duse(i,i,:) = reshape(lam_use(i,:),1,1,N);
+    end
+
+    Hreg = pagemtimes(pagemtimes(V,Duse),permute(V,[2 1 3]));
+    Hreg = 0.5*(Hreg + permute(Hreg,[2 1 3]));
+
+catch
+
+    Hreg = zeros(Nc,Nc,N);
+
+    for i = 1:N
+        H           = Hs(:,:,i);
+        scale       = max(1,norm(H,'fro')/max(1,Nc));
+        evmin       = min(eig(H));
+        shift       = max(0,1e-10*scale - evmin);
+        Hreg(:,:,i) = H + (shift + lam_c*scale) * eye(Nc);
+    end
+end
+end
+
+%This function simply update c with a step fraction alpha
 function c_new = AddStep(c_old,dc_all,alpha_node)
 c_new = c_old;
-for ip = 1:numel(c_old)
-    for ic = 1:numel(c_old{ip})
-        c_new{ip}{ic} = c_old{ip}{ic} + alpha_node .* dc_all{ip}{ic};
+for ip = 1:length(c_old)
+    for ic = 1:length(c_old{ip})
+        c_new{ip}{ic} = c_old{ip}{ic} + alpha_node.*dc_all{ip}{ic};
     end
 end
 end
-
 
 function dcmax = MaxAbsStep(dc_all)
 dcmax = 0;
-for ip = 1:numel(dc_all)
-    for ic = 1:numel(dc_all{ip})
+for ip = 1:length(dc_all)
+    for ic = 1:length(dc_all{ip})
         dcmax = max(dcmax,max(abs(dc_all{ip}{ic})));
     end
 end
 end
 
+function dcnode = MaxAbsStepNode(dc_all,N)
 
-function val = MinPageEigenvalue(A)
-[~,~,N] = size(A);
-val = inf;
-for inode = 1:N
-    As = 0.5 * (A(:,:,inode) + A(:,:,inode).');
-    val = min(val,min(eig(As)));
+dcnode = zeros(1,N);
+
+for ip = 1:length(dc_all)
+    for ic = 1:length(dc_all{ip})
+        dcnode = max(dcnode,abs(dc_all{ip}{ic}));
+    end
+end
+
+end
+
+function mu_e = CellFromMat_Local(mu_mat,Ne)
+mu_e = cell(1,Ne);
+for ie = 1:Ne
+    mu_e{ie} = mu_mat(ie,:);
+end
+end
+
+function chi = CellFromPage_Local(chi_page,Ne)
+chi = cell(Ne,Ne);
+for i = 1:Ne
+    for j = 1:Ne
+        chi{i,j} = reshape(chi_page(i,j,:),1,[]);
+    end
 end
 end
