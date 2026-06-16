@@ -33,19 +33,19 @@ metadata_file = 'MetaData.xlsx';
 phs_name = {'Olivine','Melt'};
 
 % Domain
-Lx = 5e-6;
-Ly = 5e-6;
+Lx = 5e-5;
+Ly = 5e-5;
 nx = 100;
 ny = 100;
 
 % Olivine seeds in melt
-N_olivine_seed = 5;
-olivine_frac   = 0.05;
-min_gap_fac    = 2.50;      % minimum center distance relative to 2*radius
-rng_seed       = 2;
+N_olivine_seed = 1;
+olivine_frac   = 0.01;
+min_gap_fac    = 3.50;      % minimum center distance relative to 2*radius
+rng_seed       = 1;
 
 % Grain orientation controls
-theta_rng_seed   = 1003;
+theta_rng_seed   = 1002;
 theta_grain_user = [];
 
 %% ========================================================================
@@ -79,7 +79,7 @@ phase_prop = [olivine_frac,1-olivine_frac];
 %
 % Fallback values are only placeholders.
 c_value = cell(1,numel(phs_name));
-c_value{1} = Get_Phase_Init_C(META,'Olivine',[0.00 0.45 0.45]);
+c_value{1} = Get_Phase_Init_C(META,'Olivine',[0.45 0.45]);
 c_value{2} = Get_Phase_Init_C(META,'Melt'   ,[0.35]);
 
 %% ========================================================================
@@ -121,14 +121,20 @@ for ip = 1:Nphase
     end
 end
 
+
 %% ========================================================================
 %  Grid
 % ========================================================================
 
-x  = linspace(0,Lx,nx)/L_sc;
-y  = linspace(0,Ly,ny)/L_sc;
-dx = x(2)-x(1);
-dy = y(2)-y(1);
+x_SI  = linspace(0,Lx,nx);
+y_SI  = linspace(0,Ly,ny);
+dx_SI = x_SI(2)-x_SI(1);
+dy_SI = y_SI(2)-y_SI(1);
+
+x  = x_SI/L_sc;
+y  = y_SI/L_sc;
+dx = dx_SI/L_sc;
+dy = dy_SI/L_sc;
 
 GRID       = struct();
 GRID.x     = x;
@@ -139,6 +145,17 @@ GRID.nx    = nx;
 GRID.ny    = ny;
 GRID.Lx    = Lx/L_sc;
 GRID.Ly    = Ly/L_sc;
+
+% Store SI copy for checking / postprocessing
+GRID.x_SI  = x_SI;
+GRID.y_SI  = y_SI;
+GRID.dx_SI = dx_SI;
+GRID.dy_SI = dy_SI;
+GRID.Lx_SI = Lx;
+GRID.Ly_SI = Ly;
+
+% This tells Read_PFM_Metadata not to scale GRID again.
+GRID.is_scaled = 1;
 
 %% ========================================================================
 %  Uniform phase compositions from reference LE
@@ -166,7 +183,7 @@ ol_area       = olivine_frac*GRID.Lx*GRID.Ly;
 seed_radius   = sqrt(ol_area/(N_olivine_seed*pi));
 seed_radius_m = seed_radius*L_sc;
 
-seed_xy = zeros(N_olivine_seed+1,2);
+seed_xy       = zeros(N_olivine_seed+1,2);
 
 for iseed = 1:N_olivine_seed
 
@@ -202,6 +219,9 @@ end
 % Melt grain uses domain center only as a marker
 melt_grain              = N_olivine_seed + 1;
 seed_xy(melt_grain,:)   = [mean(GRID.x),mean(GRID.y)];
+
+seed_xy(1,1) = GRID.Lx/2;
+seed_xy(1,2) = GRID.Ly/2;
 
 Ngrain = N_olivine_seed + 1;
 Np     = Ngrain;
@@ -246,7 +266,7 @@ if isempty(theta_grain_user)
         rng(theta_rng_seed,'twister')
     end
 
-    theta_grain(1:N_olivine_seed) = pi*rand(1,N_olivine_seed);
+    theta_grain(1:N_olivine_seed) = 0*pi*rand(1,N_olivine_seed);
     theta_grain(melt_grain)       = 0;
 
     rng(rng_state)
@@ -538,8 +558,6 @@ META.M_phs = zeros(Nphase,Ne);
 for ip = 1:Nphase
 
     Cph = readcell(xlsx_file,'Sheet',phs_name{ip});
-    META.M_phs(ip,:) = Read_Phase_Mobility(Cph,elem_list);
-
     META.phase(ip).name             = phs_name{ip};
     META.phase(ip).interface_energy = Get_Value(Cph,'Interface energy',0.5);
     META.phase(ip).aniso_mode       = Get_Value(Cph,'Anisotropy mode','iso');

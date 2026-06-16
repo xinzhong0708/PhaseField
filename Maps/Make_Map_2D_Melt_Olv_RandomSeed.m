@@ -94,7 +94,7 @@ phase_sep_weight    = 1000;    % large value makes separation dominate area fit
 % Scaling / penalty
 PHYS        = struct();
 PHYS.E_sc   = 1e9;
-PHYS.L_sc   = 1;
+PHYS.L_sc   = 1e-6;
 PHYS.vref   = 2e-5;
 
 E_sc        = PHYS.E_sc;

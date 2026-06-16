@@ -1,13 +1,24 @@
-function [PHYS,NUM,PARAM,MODEL] = Read_PFM_Metadata(xlsx_file,GRID,MODEL,STATE,eta,PARAM)
-%READ_PFM_METADATA Read PFM metadata from Excel.
+function [PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata(xlsx_file,GRID,MODEL,STATE,eta,PARAM)
+%READ_PFM_METADATA Read PFM metadata from Excel and scale to code units.
+%
+% Excel metadata is assumed to be in SI / physical units.
+%
+% Scaling:
+%
+%   x_code      = x_SI / L_sc
+%   t_code      = t_SI / t_sc
+%   sigma_code  = sigma_SI / (E_sc*L_sc)
+%   kappa_code  = kappa_SI / (E_sc*L_sc^2)
+%   M_code      = M_SI * t_sc/L_sc^2 * chi_ref
+%   eta_code    = eta_SI / E_sc
 %
 % Required sheets:
 %   Main
 %   PTt_Path
 %   one sheet for each phase in MODEL.phs_name
 %
-% Mobility table is interpreted directly as code mobility M.
-% No D-to-M conversion is done here.
+% Mobility table is interpreted as constant elemental mobility in SI.
+% It is scaled here and stored in PHYS.M_phs.
 
 if nargin < 6 || isempty(PARAM)
     PARAM = struct();
@@ -28,8 +39,8 @@ end
 % Main metadata
 % ------------------------------------------------------------
 elem_list = Get_Row_List(Cmain,'Independent c (Si dependent)');
-solmod    = Get_Value(Cmain,'Solution name','solution_models_PFM');
-vref      = Get_Value(Cmain,'Molar volume',2e-5);
+solmod    = Get_Value_Any(Cmain,{'Solution name','Solution model'},'solution_models_PFM');
+vref      = Get_Value_Any(Cmain,{'Molar volume','vref'},2e-5);
 
 if isempty(elem_list)
     error('Read_PFM_Metadata: element list is missing in Main sheet.')
@@ -51,89 +62,144 @@ for ip = 1:Nphase
 end
 
 % ------------------------------------------------------------
-% PHYS
+% PHYS: scales
 % ------------------------------------------------------------
 PHYS             = struct();
 
-PHYS.E_sc        = Get_Value(Cmain,'Energy scale',1e9);
-PHYS.L_sc        = Get_Value(Cmain,'Length scale',1e-6);
-PHYS.t_sc        = Get_Value(Cmain,'Time scale',1);
+PHYS.E_sc        = Get_Value_Any(Cmain,{'Energy scale','Energy scaling'},1e9);
+PHYS.L_sc        = Get_Value_Any(Cmain,{'Length scale','Length scaling'},1e-6);
+PHYS.t_sc        = Get_Value_Any(Cmain,{'Time scale','Time scaling'},1);
 PHYS.vref        = vref;
 
-PHYS.chi_ref     = Get_Value(Cmain,'chi_ref',1e-2);
-PHYS.dceq        = Get_Value(Cmain,'dceq',0.5);
+PHYS.chi_ref     = Get_Value_Any(Cmain,{'chi_ref','chi ref'},1e-2);
+PHYS.dceq        = Get_Value_Any(Cmain,{'dceq','dc eq'},0.5);
 
-thick_fac        = Get_Value(Cmain,'Interface thick factor',3);
-PHYS.l           = thick_fac*GRID.dx/PHYS.L_sc;
+% ------------------------------------------------------------
+% Scale GRID once
+% ------------------------------------------------------------
+if ~isfield(GRID,'is_scaled') || GRID.is_scaled == 0
 
-kappa_phys       = Get_Value(Cmain,'4th order kappa',0);
-PHYS.kappa       = kappa_phys/(PHYS.E_sc*PHYS.L_sc^2);
+    GRID.x_SI  = GRID.x;
+    GRID.y_SI  = GRID.y;
+    GRID.dx_SI = GRID.dx;
+    GRID.dy_SI = GRID.dy;
 
-sigma_phase_Jm2  = zeros(1,Nphase);
+    if isfield(GRID,'Lx')
+        GRID.Lx_SI = GRID.Lx;
+    end
+
+    if isfield(GRID,'Ly')
+        GRID.Ly_SI = GRID.Ly;
+    end
+
+    GRID.x  = GRID.x /PHYS.L_sc;
+    GRID.y  = GRID.y /PHYS.L_sc;
+    GRID.dx = GRID.dx/PHYS.L_sc;
+    GRID.dy = GRID.dy/PHYS.L_sc;
+
+    if isfield(GRID,'Lx')
+        GRID.Lx = GRID.Lx/PHYS.L_sc;
+    end
+
+    if isfield(GRID,'Ly')
+        GRID.Ly = GRID.Ly/PHYS.L_sc;
+    end
+
+    GRID.is_scaled = 1;
+
+end
+
+% ------------------------------------------------------------
+% Interface parameters from SI to code units
+% ------------------------------------------------------------
+thick_fac        = Get_Value_Any(Cmain,{'Interface thick factor','Interface thickness factor'},3);
+PHYS.l           = thick_fac*GRID.dx;
+
+kappa_SI         = Get_Value_Any(Cmain,{'4th order kappa','kappa'},0);
+PHYS.kappa_SI    = kappa_SI;
+PHYS.kappa       = kappa_SI/(PHYS.E_sc*PHYS.L_sc^2);
+
+sigma_phase_SI   = zeros(1,Nphase);
 
 for ip = 1:Nphase
 
     Cph = readcell(xlsx_file,'Sheet',MODEL.phs_name{ip});
-    sigma_phase_Jm2(ip) = Get_Value(Cph,'Interface energy',0.5);
+    sigma_phase_SI(ip) = Get_Value_Any(Cph,{'Interface energy','Interface energy J/m2','sigma_J_m2'},0.5);
 
 end
 
-PHYS.sigma_phase_Jm2 = sigma_phase_Jm2;
+PHYS.sigma_phase_SI = sigma_phase_SI;
+PHYS.sigma_phase    = sigma_phase_SI/(PHYS.E_sc*PHYS.L_sc);
 
 % Current solver still uses one scalar sigma.
 % For now use the mean phase value.
-PHYS.sigma      = mean(sigma_phase_Jm2)/(PHYS.E_sc*PHYS.L_sc);
+PHYS.sigma      = mean(PHYS.sigma_phase);
 
 PHYS.m          = 6*PHYS.sigma/PHYS.l;
 PHYS.kap        = 3/4*PHYS.sigma*PHYS.l;
-PHYS.eta        = MODEL.eta;
 
 % ------------------------------------------------------------
-% NUM
+% Eta
+% ------------------------------------------------------------
+eta_SI = Get_Value_Any(Cmain,{'Penalty eta','eta'},[]);
+
+if isempty(eta_SI)
+
+    % eta from Map2d.mat is normally already scaled.
+    PHYS.eta = eta;
+
+else
+
+    PHYS.eta = eta_SI/PHYS.E_sc*ones(GRID.ny,GRID.nx);
+
+end
+
+% ------------------------------------------------------------
+% NUM: all time values from SI to code units
 % ------------------------------------------------------------
 NUM                     = struct();
 
-NUM.dt_phy              = Get_Value(Cmain,'dt initial',1e-2)/PHYS.t_sc;
-NUM.dt_max              = Get_Value(Cmain,'dt max',100)/PHYS.t_sc;
-NUM.dt_min              = Get_Value(Cmain,'dt min',1e-15)/PHYS.t_sc;
+NUM.dt_phy              = Get_Value_Any(Cmain,{'dt initial','Initial dt'},1e-2)/PHYS.t_sc;
+NUM.dt_max              = Get_Value_Any(Cmain,{'dt max','Maximum dt'},100)/PHYS.t_sc;
+NUM.dt_min              = Get_Value_Any(Cmain,{'dt min','Minimum dt'},1e-15)/PHYS.t_sc;
 
 NUM.t_phy               = 0;
 NUM.time                = 0;
 
-NUM.dE_target           = Get_Value(Cmain,'dE target',3e-2);
-NUM.dp_target           = Get_Value(Cmain,'dp target',3e-2);
-NUM.dmu_target          = Get_Value(Cmain,'dmu target',1e2);
+NUM.dE_target           = Get_Value_Any(Cmain,{'dE target'},3e-2);
+NUM.dp_target           = Get_Value_Any(Cmain,{'dp target'},3e-2);
+NUM.dmu_target          = Get_Value_Any(Cmain,{'dmu target'},1e2);
 
-NUM.dt_good_count       = Get_Value(Cmain,'dt good count',0);
-NUM.dt_grow_after       = Get_Value(Cmain,'dt grow after',8);
-NUM.dt_grow_fac         = Get_Value(Cmain,'dt grow factor',1.15);
-NUM.dt_shrink_fac       = Get_Value(Cmain,'dt shrink factor',0.5);
-NUM.err_grow            = Get_Value(Cmain,'error grow',0.25);
+NUM.dt_good_count       = Get_Value_Any(Cmain,{'dt good count'},0);
+NUM.dt_grow_after       = Get_Value_Any(Cmain,{'dt grow after'},8);
+NUM.dt_grow_fac         = Get_Value_Any(Cmain,{'dt grow factor'},1.15);
+NUM.dt_shrink_fac       = Get_Value_Any(Cmain,{'dt shrink factor'},0.5);
+NUM.err_grow            = Get_Value_Any(Cmain,{'error grow'},0.25);
 
-NUM.phi_mask_cut        = Get_Value(Cmain,'phi mask cutoff',1e-8);
-NUM.phi_mask_thick      = Get_Value(Cmain,'phi mask thickness grid',3);
-NUM.norm_phi            = Get_Value(Cmain,'normalize phi or not',1);
-NUM.cut_phi             = Get_Value(Cmain,'cut phi or not',0);
-NUM.norm_E              = Get_Value(Cmain,'normalize E or not',1);
-NUM.int_damp            = Get_Value(Cmain,'interface damping factor',0.1);
-NUM.use_Jphi            = Get_Value(Cmain,'use J_phi or not',0);
+NUM.phi_mask_cut        = Get_Value_Any(Cmain,{'phi mask cutoff'},1e-8);
+NUM.phi_mask_thick      = Get_Value_Any(Cmain,{'phi mask thickness grid'},3);
+NUM.norm_phi            = Get_Value_Any(Cmain,{'normalize phi or not'},1);
+NUM.cut_phi             = Get_Value_Any(Cmain,{'cut phi or not'},0);
+NUM.norm_E              = Get_Value_Any(Cmain,{'normalize E or not'},1);
+NUM.int_damp            = Get_Value_Any(Cmain,{'interface damping factor'},0.1);
+NUM.use_Jphi            = Get_Value_Any(Cmain,{'use J_phi or not'},0);
 
-NUM.CHLE_p_cut          = Get_Value(Cmain,'CH LE p cutoff',1e-8);
-NUM.CHLE_band_thick     = Get_Value(Cmain,'CH LE band thickness',16);
+NUM.CHLE_p_cut          = Get_Value_Any(Cmain,{'CH LE p cutoff'},1e-8);
+NUM.CHLE_band_thick     = Get_Value_Any(Cmain,{'CH LE band thickness'},16);
 NUM.CHLE_res_rel        = [];
 
-NUM.linear_solver       = Get_Value(Cmain,'Linear solver method','bicgstab_ilu');
-NUM.linear_tol          = Get_Value(Cmain,'Linear solver tolerance',1e-8);
-NUM.linear_maxit        = Get_Value(Cmain,'Linear solver max iteration',500);
-NUM.ilu_reuse           = Get_Value(Cmain,'Linear solver ilu reuse cache',1);
-NUM.ilu_reuse_steps     = Get_Value(Cmain,'Linear solver reuse steps',5);
-NUM.ilu_rebuild         = Get_Value(Cmain,'Linear solver ilu rebuild or not',1);
-NUM.direct_fallback     = Get_Value(Cmain,'Linear solver fallback',1);
+NUM.linear_solver       = Get_Value_Any(Cmain,{'Linear solver method'},'bicgstab_ilu');
+NUM.linear_tol          = Get_Value_Any(Cmain,{'Linear solver tolerance'},1e-8);
+NUM.linear_maxit        = Get_Value_Any(Cmain,{'Linear solver max iteration'},500);
+NUM.ilu_reuse           = Get_Value_Any(Cmain,{'Linear solver ilu reuse cache'},1);
+NUM.ilu_reuse_steps     = Get_Value_Any(Cmain,{'Linear solver reuse steps'},5);
+NUM.ilu_rebuild         = Get_Value_Any(Cmain,{'Linear solver ilu rebuild or not'},1);
+NUM.direct_fallback     = Get_Value_Any(Cmain,{'Linear solver fallback'},1);
 
-NUM.ilu_reuse_ACCH          = Get_Value(Cmain,'Ilu preconditioner reuse cache',1);
-NUM.ilu_reuse_steps_ACCH    = Get_Value(Cmain,'Ilu preconditioner reuse steps',10);
-NUM.ACCH_mask_update        = Get_Value(Cmain,'AC-CH solver mask update',NUM.ilu_reuse_steps_ACCH);
-NUM.ilu_cache_check_pattern = Get_Value(Cmain,'Ilu cache check pattern',0);
+NUM.ilu_reuse_ACCH          = Get_Value_Any(Cmain,{'Ilu preconditioner reuse cache'},1);
+NUM.ilu_reuse_steps_ACCH    = Get_Value_Any(Cmain,{'Ilu preconditioner reuse steps'},10);
+NUM.ACCH_mask_update        = Get_Value_Any(Cmain,{'AC-CH solver mask update'},NUM.ilu_reuse_steps_ACCH);
+NUM.ilu_cache_check_pattern = Get_Value_Any(Cmain,{'Ilu cache check pattern'},0);
 
 % ------------------------------------------------------------
 % P-T-t path
@@ -179,20 +245,20 @@ MODEL.dpdphi = @(a,b,phi) ...
 % ------------------------------------------------------------
 PARAM.Np            = length(STATE.c);
 PARAM.Ne            = length(STATE.E);
-PARAM.eta           = MODEL.eta;
+PARAM.eta           = PHYS.eta;
 PARAM.use_WScale    = 0;
 
-PARAM.use_CS_chi    = Get_Value(Cmain,'Use convex split',1);
-PARAM.CS_chi_floor  = Get_Value(Cmain,'Convex split floor',1e-9);
-PARAM.CS_chi_cap    = Get_Value(Cmain,'Convex split cap',1e-2);
+PARAM.use_CS_chi    = Get_Value_Any(Cmain,{'Use convex split'},1);
+PARAM.CS_chi_floor  = Get_Value_Any(Cmain,{'Convex split floor'},1e-9);
+PARAM.CS_chi_cap    = Get_Value_Any(Cmain,{'Convex split cap'},1e-2);
 
-PARAM.use_kappa_c   = Get_Value(Cmain,'Use 4th order term for c',1);
-PARAM.L_fac         = Get_Value(Cmain,'L scaling factor',0.5);
-PARAM.LE_mode       = Get_Value(Cmain,'LE solver (LE or GP)','LE');
+PARAM.use_kappa_c   = Get_Value_Any(Cmain,{'Use 4th order term for c'},1);
+PARAM.L_fac         = Get_Value_Any(Cmain,{'L scaling factor'},0.5);
+PARAM.LE_mode       = Get_Value_Any(Cmain,{'LE solver (LE or GP)'},'LE');
 
-PARAM.M_L_floor_fac      = Get_Value(Cmain,'M L floor factor',1e-2);
-PARAM.M_L_interface_only = Get_Value(Cmain,'M L interface only',1);
-PARAM.M_L_p_cut          = Get_Value(Cmain,'M L p cutoff',1e-8);
+PARAM.M_L_floor_fac      = Get_Value_Any(Cmain,{'M L floor factor'},1e-2);
+PARAM.M_L_interface_only = Get_Value_Any(Cmain,{'M L interface only'},1);
+PARAM.M_L_p_cut          = Get_Value_Any(Cmain,{'M L p cutoff'},1e-8);
 
 PARAM.dceq          = PHYS.dceq;
 
@@ -218,7 +284,9 @@ if numel(elem_list) ~= Ne
     error('Read_PFM_Metadata: number of Excel mobility elements does not match STATE.E / PARAM.Ne.')
 end
 
+PHYS.M_phs_SI       = zeros(Nphase,Ne);
 PHYS.M_phs          = zeros(Nphase,Ne);
+
 PARAM.aniso_mode    = cell(1,Nphase);
 PARAM.aniso_phase   = [];
 facet_all           = struct([]);
@@ -228,10 +296,17 @@ for ip = 1:Nphase
     phase_name = MODEL.phs_name{ip};
     Cph        = readcell(xlsx_file,'Sheet',phase_name);
 
-    % Mobility is loaded directly as code mobility M.
-    PHYS.M_phs(ip,:) = Read_Phase_Mobility(Cph,elem_list);
+    % Mobility in Excel is SI.
+    % Convert to code mobility using the same convention as old Run_2D:
+    %
+    %   M_code = M_SI * t_sc/L_sc^2 * chi_ref
+    %
+    M_SI = Read_Phase_Mobility(Cph,elem_list);
 
-    mode = lower(Get_Value(Cph,'Anisotropy mode','iso'));
+    PHYS.M_phs_SI(ip,:) = M_SI;
+    PHYS.M_phs(ip,:)    = M_SI * PHYS.t_sc/PHYS.L_sc^2 * PHYS.chi_ref;
+
+    mode = lower(Get_Value_Any(Cph,{'Anisotropy mode'},'iso'));
     PARAM.aniso_mode{ip} = mode;
 
     if ~strcmpi(mode,'iso')
@@ -240,10 +315,10 @@ for ip = 1:Nphase
 
     facet_all(ip).phase_name = phase_name;
     facet_all(ip).mode       = mode;
-    facet_all(ip).nfold      = Get_Value(Cph,'Anisotropy n fold',[]);
-    facet_all(ip).q          = Get_Value(Cph,'Anisotropy q',0.25);
-    facet_all(ip).amin       = Get_Value(Cph,'Anisotropy min',0.2);
-    facet_all(ip).amax       = Get_Value(Cph,'Anisotropy max',10);
+    facet_all(ip).nfold      = Get_Value_Any(Cph,{'Anisotropy n fold'},[]);
+    facet_all(ip).q          = Get_Value_Any(Cph,{'Anisotropy q'},0.25);
+    facet_all(ip).amin       = Get_Value_Any(Cph,{'Anisotropy min'},0.2);
+    facet_all(ip).amax       = Get_Value_Any(Cph,{'Anisotropy max'},10);
 
     [hkl,theta_deg,A_weight] = Read_Facet_Table(Cph);
 
@@ -251,6 +326,15 @@ for ip = 1:Nphase
     facet_all(ip).theta_deg = theta_deg;
     facet_all(ip).theta     = theta_deg*pi/180;
     facet_all(ip).A_weight  = A_weight;
+    facet_all(ip).A         = A_weight;
+
+    if ~isempty(A_weight)
+        facet_all(ip).A_ref = max(A_weight);
+    else
+        facet_all(ip).A_ref = 1.0;
+    end
+
+    facet_all(ip).sigma_ref = 1.0;
 
 end
 
@@ -269,46 +353,64 @@ if ~isempty(PARAM.aniso_phase)
     PARAM.facet     = facet_all;
 end
 
+% ------------------------------------------------------------
+% Scaling diagnostics
+% ------------------------------------------------------------
+fprintf('\nMetadata scaling check:\n')
+fprintf('GRID.dx              = %.6e\n',GRID.dx)
+fprintf('PHYS.l              = %.6e\n',PHYS.l)
+fprintf('PHYS.sigma          = %.6e\n',PHYS.sigma)
+fprintf('PHYS.kappa          = %.6e\n',PHYS.kappa)
+fprintf('PHYS.M0             = %.6e\n',PHYS.M0)
+fprintf('PHYS.m              = %.6e\n',PHYS.m)
+fprintf('PHYS.kap            = %.6e\n',PHYS.kap)
+fprintf('NUM.dt_phy          = %.6e\n',NUM.dt_phy)
+fprintf('NUM.t_tot           = %.6e\n',NUM.t_tot)
+
 end
 
 %% ========================================================================
 %  Local helper functions
 % ========================================================================
 
-function val = Get_Value(C,key,default)
+function val = Get_Value_Any(C,keys,default)
 
 val = default;
-key = strtrim(key);
 
-for i = 1:size(C,1)
+for ik = 1:numel(keys)
 
-    key_i = strtrim(Cell_String(C{i,1}));
+    key = strtrim(keys{ik});
 
-    if strcmpi(key_i,key)
+    for i = 1:size(C,1)
 
-        if size(C,2) < 2 || Is_Empty_Cell(C{i,2})
-            return
-        end
+        key_i = strtrim(Cell_String(C{i,1}));
 
-        raw = C{i,2};
+        if strcmpi(key_i,key)
 
-        if isnumeric(raw)
-            val = raw;
-        elseif ischar(raw) || isstring(raw)
-
-            tmp = str2double(raw);
-
-            if isnan(tmp)
-                val = char(raw);
-            else
-                val = tmp;
+            if size(C,2) < 2 || Is_Empty_Cell(C{i,2})
+                return
             end
 
-        else
-            val = raw;
-        end
+            raw = C{i,2};
 
-        return
+            if isnumeric(raw)
+                val = raw;
+            elseif ischar(raw) || isstring(raw)
+
+                tmp = str2double(raw);
+
+                if isnan(tmp)
+                    val = char(raw);
+                else
+                    val = tmp;
+                end
+
+            else
+                val = raw;
+            end
+
+            return
+        end
     end
 end
 

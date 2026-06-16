@@ -382,10 +382,16 @@ for alpha = 1:Ngrain
 
     % Coupling to dmu:
     % coeff_mu = -L * sum_i e_i * dp_i/dphi_alpha
+    if isfield(PARAM,'L_AC') && ~isempty(PARAM.L_AC) && size(PARAM.L_AC,3) >= alpha
+        L_a = PARAM.L_AC(:,:,alpha);
+    else
+        L_a = PARAM.L;
+    end
+
     for ie = 1:Ne
 
         B_ie_alpha = facPhi{alpha} .* (e0{alpha}{ie} - e_bar{ie});
-        coeff_mu   = -PARAM.L .* B_ie_alpha;
+        coeff_mu   = -L_a .* B_ie_alpha;
 
         [rows,cols,vals,k] = add_block( ...
             rows,cols,vals,k,row,idMu{ie}(idx_a),coeff_mu(idx_a));
