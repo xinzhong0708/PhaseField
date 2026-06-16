@@ -1,36 +1,38 @@
 function PARAM = Calc_AC_Anisotropy_FacetedStiffness(STATE,PARAM,MODEL,GRID)
 %CALC_AC_ANISOTROPY_FACETEDSTIFFNESS Kundin-style faceted AC anisotropy.
 %
-% Metadata fields used:
+% This function builds anisotropic AC coefficients:
 %
-%   PARAM.facet(iph).mode
-%   PARAM.facet(iph).theta
-%   PARAM.facet(iph).theta_deg
-%   PARAM.facet(iph).A
-%   PARAM.facet(iph).A_weight
-%   PARAM.facet(iph).q
-%   PARAM.facet(iph).amin
-%   PARAM.facet(iph).amax
+%   PARAM.L_AC(:,:,ig)
+%   PARAM.Lm_AC(:,:,ig)
+%   PARAM.LK_AC(:,:,ig)
 %
-% Kundin-style stiffness:
+% Kundin-style idea:
 %
-%   sigma* = sigma_ref * (A/A_ref) * q^2 ...
-%          / (sin(dtheta)^2 + q^2*cos(dtheta)^2)^(3/2)
+%   1. Interface normal comes from grad(phi).
+%   2. Find nearest facet normal.
+%   3. Compute Kundin surface-energy factor from Eq. 15-16.
 %
-% Larger A means larger facet area / stronger persistence.
+%   sigma / sigma_001 = (A_ref/A_facet) * sqrt(sin(dtheta)^2 + q^2*cos(dtheta)^2) / q
 %
-% This version keeps the legacy behavior:
-%   L_AC, Lm_AC, and LK_AC are all scaled by the anisotropic factor.
+% Larger A_weight means larger equilibrium facet area, therefore lower
+% surface energy and a more persistent/longer facet.
+%
+% Notes:
+%   - facet.theta is facet-normal angle in crystal coordinates.
+%   - PARAM.theta_grain rotates crystal coordinates into lab coordinates.
+%   - q controls cusp sharpness. Smaller q gives stronger facets.
+%   - L itself is not scaled here; only Lm and LK are scaled.
 
 [ny,nx,Ngrain] = size(STATE.phi);
 
 % ------------------------------------------------------------
 % Defaults
 % ------------------------------------------------------------
-nfold       = 6;
-q_default   = 0.4;
-s_min       = 0.3;
-s_max       = 3.0;
+nfold       = 4;
+q_default   = 0.25;
+s_min       = 0.1;
+s_max       = 20.0;
 grad_min    = 1e-12;
 p_cut       = 1e-8;
 normalize_s = 1;
@@ -64,7 +66,6 @@ faceted_grain = false(1,Ngrain);
 if isfield(PARAM,'aniso_phase') && ~isempty(PARAM.aniso_phase)
 
     for ig = 1:Ngrain
-
         iph = MODEL.phase_index(ig);
 
         if any(iph == PARAM.aniso_phase)
@@ -104,10 +105,12 @@ PARAM.Lm_AC = zeros(ny,nx,Ngrain);
 PARAM.LK_AC = zeros(ny,nx,Ngrain);
 
 PARAM.sigma_star_fac = ones(ny,nx,Ngrain);
+PARAM.sigma_energy_fac = ones(ny,nx,Ngrain);
 PARAM.aniso_theta    = zeros(ny,nx,Ngrain);
 PARAM.aniso_factor   = ones(ny,nx,Ngrain);
 PARAM.aniso_ifacet   = zeros(ny,nx,Ngrain);
 
+sigma_fac_raw  = ones(ny,nx,Ngrain);
 sigma_star_raw = ones(ny,nx,Ngrain);
 interface_mask = false(ny,nx,Ngrain);
 
@@ -118,7 +121,7 @@ for ig = 1:Ngrain
 end
 
 % ------------------------------------------------------------
-% First pass: raw Kundin stiffness for each grain
+% First pass: grain-wise solid-liquid surface energy factor
 % ------------------------------------------------------------
 for alpha = 1:Ngrain
 
@@ -129,49 +132,61 @@ for alpha = 1:Ngrain
     gnorm = sqrt(gx.^2 + gy.^2);
     mask  = gnorm > grad_min;
 
-    theta_n = atan2(gy,gx);
+    theta_lab = atan2(gy,gx);
 
     if faceted_grain(alpha)
 
         iph = MODEL.phase_index(alpha);
 
-        [facet_theta,facet_A,sigma_ref,A_ref,q,smin_phase,smax_phase] = ...
-            Local_Get_Facet_Data(PARAM,iph,nfold,q_default,s_min,s_max);
+        [facet_theta,facet_A,sigma_ref,A_ref,q] = Local_Get_Facet_Data(PARAM,iph,nfold,q_default);
 
-        % Legacy behavior:
-        % rotate crystal facet normals into lab frame.
-        facet_theta = facet_theta + theta_grain(alpha);
+        % Convert lab normal angle into crystal frame.
+        theta_crystal = Local_WrapHalfPi(theta_lab - theta_grain(alpha));
 
-        [dtheta,ifacet] = Local_Nearest_Facet_Angle(theta_n,facet_theta);
+        [dtheta,ifacet] = Local_Nearest_Facet_Angle(theta_crystal,facet_theta);
 
         A_use = facet_A(ifacet);
 
         den = sin(dtheta).^2 + q^2*cos(dtheta).^2;
 
+        % Kundin surface energy, Eq. 15 and Eq. 16.
+        % Normalize by the {001} value at dtheta = 0 so that {001}
+        % has factor 1, {100} has factor A001/A100, and directions
+        % between facets have larger energy.  This gives axis-aligned
+        % rectangular facets in this scalar AC discretization.
+        sigma_energy = sigma_ref .* (A_ref./A_use) .* sqrt(den);
+        sigma_fac    = sigma_energy ./ max(sigma_ref*q,eps);
+
+        % Keep the true Kundin stiffness only as a diagnostic.  Applying
+        % this directly as the scalar LK/Lm multiplier makes the diagonal
+        % directions artificially cheap and gives a diamond in this solver.
         sigma_star = sigma_ref .* (A_use./A_ref) .* q^2 ./ den.^(3/2);
 
-        sigma_star(~mask) = sigma_ref;
-        sigma_star = min(max(sigma_star,smin_phase),smax_phase);
+        sigma_fac(~mask)  = 1;
+        sigma_star(~mask) = 1;
 
     else
 
-        dtheta     = zeros(ny,nx);
-        ifacet     = zeros(ny,nx);
-        sigma_star = ones(ny,nx);
+        dtheta      = zeros(ny,nx);
+        ifacet      = zeros(ny,nx);
+        sigma_fac   = ones(ny,nx);
+        sigma_star  = ones(ny,nx);
 
     end
 
+    sigma_fac_raw(:,:,alpha)  = sigma_fac;
     sigma_star_raw(:,:,alpha) = sigma_star;
     interface_mask(:,:,alpha) = mask;
 
-    PARAM.sigma_star_fac(:,:,alpha) = sigma_star;
+    PARAM.sigma_energy_fac(:,:,alpha) = sigma_fac;
+    PARAM.sigma_star_fac(:,:,alpha)   = sigma_star;
     PARAM.aniso_theta(:,:,alpha)    = dtheta;
     PARAM.aniso_ifacet(:,:,alpha)   = ifacet;
 
 end
 
 % ------------------------------------------------------------
-% Second pass: pairwise effective stiffness
+% Second pass: pair effective stiffness
 % ------------------------------------------------------------
 for alpha = 1:Ngrain
 
@@ -187,11 +202,11 @@ for alpha = 1:Ngrain
 
         p_b = STATE.p(:,:,beta);
 
-        % Diffuse-interface weight.
+        % Use p_a*p_b in diffuse interfaces.
         w = p_a .* p_b;
 
-        % Important for sharp 0/1 initial maps.
-        % If p_a*p_b is zero, use overlapping gradient masks.
+        % If the initial map is still sharp 0/1, p_a*p_b can be zero.
+        % Then fall back to overlapping gradient masks.
         if max(w(:)) <= p_cut
             w = double(interface_mask(:,:,alpha) & interface_mask(:,:,beta));
         end
@@ -203,13 +218,13 @@ for alpha = 1:Ngrain
         iph_a = MODEL.phase_index(alpha);
         iph_b = MODEL.phase_index(beta);
 
-        sig_a = sigma_star_raw(:,:,alpha);
-        sig_b = sigma_star_raw(:,:,beta);
+        sig_a = sigma_fac_raw(:,:,alpha);
+        sig_b = sigma_fac_raw(:,:,beta);
 
         if iph_a == iph_b
 
             % Same thermodynamic phase grain boundary.
-            % Default: isotropic unless explicitly enabled.
+            % Default: isotropic grain boundary unless explicitly enabled.
             s_ab = ones(ny,nx);
 
             if isfield(PARAM,'aniso_same_phase') && PARAM.aniso_same_phase == 1
@@ -218,7 +233,8 @@ for alpha = 1:Ngrain
 
         else
 
-            % Different phases.
+            % Solid-liquid or different-phase boundary.
+            % If only one side is faceted, use that side's surface-energy factor.
             if faceted_grain(alpha) && ~faceted_grain(beta)
 
                 s_ab = sig_a;
@@ -248,14 +264,14 @@ for alpha = 1:Ngrain
 
     s_eff(mask_pair) = s_sum(mask_pair)./w_sum(mask_pair);
 
-    % Legacy behavior: normalize active interface.
-    % This keeps the mean interface strength comparable to isotropic.
+    % Kundin-style default: do not normalize.
+    % Normalization is useful numerically, but it weakens the absolute
+    % facet-area meaning.
     if normalize_s == 1
 
         mask_norm = mask_pair & isfinite(s_eff);
 
         if any(mask_norm(:))
-
             s_mean = mean(s_eff(mask_norm));
 
             if isfinite(s_mean) && s_mean > 0
@@ -269,8 +285,9 @@ for alpha = 1:Ngrain
 
     PARAM.aniso_factor(:,:,alpha) = s_eff;
 
-    % Legacy behavior: scale all three.
-    PARAM.L_AC(:,:,alpha)  = PARAM.L  .* s_eff;
+    % Apply anisotropic surface-energy factor to interface terms only.
+    % L_AC is the kinetic prefactor and is kept isotropic.
+    PARAM.L_AC(:,:,alpha)  = PARAM.L;
     PARAM.Lm_AC(:,:,alpha) = PARAM.Lm .* s_eff;
     PARAM.LK_AC(:,:,alpha) = PARAM.LK .* s_eff;
 
@@ -309,17 +326,15 @@ gy = (AD - AU)/(2*dy);
 end
 
 
-function [facet_theta,facet_A,sigma_ref,A_ref,q,s_min,s_max] = ...
-    Local_Get_Facet_Data(PARAM,iph,nfold,q_default,s_min_default,s_max_default)
+function [facet_theta,facet_A,sigma_ref,A_ref,q] = ...
+    Local_Get_Facet_Data(PARAM,iph,nfold,q_default)
 
-% Default equal facets over 2*pi, as in the legacy function.
-facet_theta = 2*pi*(0:nfold-1)/nfold;
+% Default equal facets in [0,pi)
+facet_theta = pi*(0:nfold-1)/nfold;
 facet_A     = ones(size(facet_theta));
 sigma_ref   = 1.0;
 A_ref       = 1.0;
 q           = q_default;
-s_min       = s_min_default;
-s_max       = s_max_default;
 
 if ~isfield(PARAM,'facet') || numel(PARAM.facet) < iph
     return
@@ -337,13 +352,13 @@ elseif isfield(facet,'theta_deg') && ~isempty(facet.theta_deg)
 
 end
 
-if isfield(facet,'A') && ~isempty(facet.A)
-
-    facet_A = facet.A(:).';
-
-elseif isfield(facet,'A_weight') && ~isempty(facet.A_weight)
+if isfield(facet,'A_weight') && ~isempty(facet.A_weight)
 
     facet_A = facet.A_weight(:).';
+
+elseif isfield(facet,'A') && ~isempty(facet.A)
+
+    facet_A = facet.A(:).';
 
 else
 
@@ -355,14 +370,25 @@ if isfield(facet,'sigma_ref') && ~isempty(facet.sigma_ref)
     sigma_ref = facet.sigma_ref;
 end
 
-if isfield(facet,'A_ref') && ~isempty(facet.A_ref)
+% Kundin uses {001} as reference.  The metadata loader currently sets
+% A_ref = max(A_weight), which is only safe when {001} is the largest
+% listed area.  Prefer the actual {001} row if hkl is available.
+iref = [];
+
+if isfield(facet,'hkl') && ~isempty(facet.hkl)
+    iref = Local_Find_HKL(facet.hkl,'001');
+end
+
+if ~isempty(iref)
+
+    A_ref = facet_A(iref);
+
+elseif isfield(facet,'A_ref') && ~isempty(facet.A_ref)
 
     A_ref = facet.A_ref;
 
 elseif ~isempty(facet_A)
 
-    % Legacy behavior: use the first listed facet as reference.
-    % If you want Kundin's exact {001} reference, put {001} first or set A_ref.
     A_ref = facet_A(1);
 
 end
@@ -371,24 +397,40 @@ if isfield(facet,'q') && ~isempty(facet.q)
     q = facet.q;
 end
 
-if isfield(facet,'amin') && ~isempty(facet.amin)
-    s_min = facet.amin;
-end
-
-if isfield(facet,'amax') && ~isempty(facet.amax)
-    s_max = facet.amax;
-end
-
 if numel(facet_A) ~= numel(facet_theta)
     error('facet_A and facet_theta must have the same length.')
 end
 
 if any(facet_A <= 0)
-    error('All facet A values must be positive.')
+    error('All facet A_weight values must be positive.')
 end
 
 if A_ref <= 0
     error('A_ref must be positive.')
+end
+
+end
+
+
+function idx = Local_Find_HKL(hkl,target)
+
+idx = [];
+
+for i = 1:numel(hkl)
+
+    s = hkl{i};
+
+    if isstring(s)
+        s = char(s);
+    end
+
+    s = regexprep(s,'[{}()\[\]\s]','');
+
+    if strcmpi(s,target)
+        idx = i;
+        return
+    end
+
 end
 
 end
@@ -405,7 +447,7 @@ ifacet_best = ones(ny,nx);
 
 for k = 1:Nfacet
 
-    dtheta = Local_WrapPi(theta - facet_theta(k));
+    dtheta = Local_WrapHalfPi(theta - facet_theta(k));
     take   = abs(dtheta) < abs_best;
 
     dtheta_best(take) = dtheta(take);
@@ -417,8 +459,11 @@ end
 end
 
 
-function a = Local_WrapPi(a)
+function a = Local_WrapHalfPi(a)
+%LOCAL_WRAPHALFPI Wrap angle difference for unoriented plane normals.
+%
+% theta and theta + pi represent the same crystal plane normal.
 
-a = mod(a + pi,2*pi) - pi;
+a = mod(a + pi/2,pi) - pi/2;
 
 end
