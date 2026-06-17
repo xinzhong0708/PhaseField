@@ -9,7 +9,6 @@ function [PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata(xlsx_file,GRID,MODEL,ST
 %   t_code      = t_SI / t_sc
 %   sigma_code  = sigma_SI / (E_sc*L_sc)
 %   kappa_code  = kappa_SI / (E_sc*L_sc^2)
-%   M_code      = M_SI * t_sc/L_sc^2 * chi_ref
 %   eta_code    = eta_SI / E_sc
 %
 % Required sheets:
@@ -70,8 +69,6 @@ PHYS.E_sc        = Get_Value_Any(Cmain,{'Energy scale','Energy scaling'},1e9);
 PHYS.L_sc        = Get_Value_Any(Cmain,{'Length scale','Length scaling'},1e-6);
 PHYS.t_sc        = Get_Value_Any(Cmain,{'Time scale','Time scaling'},1);
 PHYS.vref        = vref;
-
-PHYS.chi_ref     = Get_Value_Any(Cmain,{'chi_ref','chi ref'},1e-2);
 PHYS.dceq        = Get_Value_Any(Cmain,{'dceq','dc eq'},0.5);
 
 % ------------------------------------------------------------
@@ -233,12 +230,9 @@ eps_phi = 1e-14;
 
 MODEL.dgdphi = @(phi) 2*PHYS.m*phi.*(phi - 1).^2 + PHYS.m*phi.^2.*(2.*phi - 2);
 
-MODEL.p_fun  = @(a,phi) ...
-    phi(:,:,a).^2./(sum(phi.^2,3) + eps_phi);
+MODEL.p_fun  = @(a,phi) phi(:,:,a).^2./(sum(phi.^2,3) + eps_phi);
 
-MODEL.dpdphi = @(a,b,phi) ...
-    (a==b)*2*phi(:,:,b)./(sum(phi.^2,3) + eps_phi) ...
-    - 2*phi(:,:,a).*phi(:,:,b).^2./(sum(phi.^2,3) + eps_phi).^2;
+MODEL.dpdphi = @(a,b,phi) (a==b)*2*phi(:,:,b)./(sum(phi.^2,3) + eps_phi) - 2*phi(:,:,a).*phi(:,:,b).^2./(sum(phi.^2,3) + eps_phi).^2;
 
 % ------------------------------------------------------------
 % PARAM
@@ -284,7 +278,7 @@ if numel(elem_list) ~= Ne
     error('Read_PFM_Metadata: number of Excel mobility elements does not match STATE.E / PARAM.Ne.')
 end
 
-PHYS.M_phs_SI       = zeros(Nphase,Ne);
+PHYS.M_phs_raw      = zeros(Nphase,Ne);
 PHYS.M_phs          = zeros(Nphase,Ne);
 
 PARAM.aniso_mode    = cell(1,Nphase);
@@ -296,15 +290,13 @@ for ip = 1:Nphase
     phase_name = MODEL.phs_name{ip};
     Cph        = readcell(xlsx_file,'Sheet',phase_name);
 
-    % Mobility in Excel is SI.
-    % Convert to code mobility using the same convention as old Run_2D:
-    %
-    %   M_code = M_SI * t_sc/L_sc^2 * chi_ref
-    %
-    M_SI = Read_Phase_Mobility(Cph,elem_list);
+    % Mobility in Excel is the raw mobility used by the PF solver.
+    % This mobility is the coefficient in:
+    %   dE/dt = div( M * grad(mu_e) )
+    M_raw      = Read_Phase_Mobility(Cph,elem_list);
 
-    PHYS.M_phs_SI(ip,:) = M_SI;
-    PHYS.M_phs(ip,:)    = M_SI * PHYS.t_sc/PHYS.L_sc^2 * PHYS.chi_ref;
+    PHYS.M_phs_raw(ip,:) = M_raw;
+    PHYS.M_phs(ip,:)     = M_raw/PHYS.L_sc^2*PHYS.t_sc*PHYS.E_sc;
 
     mode = lower(Get_Value_Any(Cph,{'Anisotropy mode'},'iso'));
     PARAM.aniso_mode{ip} = mode;

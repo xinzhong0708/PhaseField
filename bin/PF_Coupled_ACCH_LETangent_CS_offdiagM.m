@@ -338,31 +338,51 @@ for alpha = 1:Ngrain
 
     phi_a = phi_ref(:,:,alpha);
 
-    lap_phi_ref = laplacian_reflect(phi_a,dx,dy);
-
     if isfield(PARAM,'LK_AC') && size(PARAM.LK_AC,3) >= alpha
         LK_a = PARAM.LK_AC(:,:,alpha);
     else
         LK_a = PARAM.LK;
     end
 
-    rhs_full = LK_a .* lap_phi_ref + S_AC{alpha};
-    R(row) = rhs_full(idx_a);
-
-    LKc = LK_a(idx_a);
-
-    Aac = PARAM.A_ac(idx_a);
-
-    cC = 1/dt + Aac + 2*LKc/dx2 + 2*LKc/dy2;
-    cL = -LKc/dx2;
-    cR = -LKc/dx2;
-    cU = -LKc/dy2;
-    cD = -LKc/dy2;
-
     idxa_L = idx_L(idx_a);
     idxa_R = idx_R(idx_a);
     idxa_U = idx_U(idx_a);
     idxa_D = idx_D(idx_a);
+
+    LKc = LK_a(idx_a);
+    LKL = LK_a(idxa_L);
+    LKR = LK_a(idxa_R);
+    LKU = LK_a(idxa_U);
+    LKD = LK_a(idxa_D);
+
+    % Face-centered LK for div(LK grad(phi))
+    LKfL = 0.5*(LKc + LKL);
+    LKfR = 0.5*(LKc + LKR);
+    LKfU = 0.5*(LKc + LKU);
+    LKfD = 0.5*(LKc + LKD);
+
+    phiC = phi_a(idx_a);
+    phiL = phi_a(idxa_L);
+    phiR = phi_a(idxa_R);
+    phiU = phi_a(idxa_U);
+    phiD = phi_a(idxa_D);
+
+    DivLKGrad_phi = ...
+        (LKfR.*(phiR - phiC) - LKfL.*(phiC - phiL))/dx2 + ...
+        (LKfD.*(phiD - phiC) - LKfU.*(phiC - phiU))/dy2;
+
+    % RHS on active nodes only
+    S_a    = S_AC{alpha};
+    R(row) = DivLKGrad_phi + S_a(idx_a);
+
+    Aac = PARAM.A_ac(idx_a);
+
+    cC = 1/dt + Aac + (LKfL + LKfR)/dx2 + (LKfU + LKfD)/dy2;
+    cL = -LKfL/dx2;
+    cR = -LKfR/dx2;
+    cU = -LKfU/dy2;
+    cD = -LKfD/dy2;
+
 
     [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idPhiMap{alpha},idx_a,  cC);
     [rows,cols,vals,k] = add_active_block(rows,cols,vals,k,row,idPhiMap{alpha},idxa_L,cL);

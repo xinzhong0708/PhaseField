@@ -41,7 +41,7 @@ for it = 1:1e5
     PARAM                =    Compute_M_And_L(STATE,PARAM,MODEL,PHYS);
 
     % CALCULATE FACET
-    PARAM                =    Calc_AC_Anisotropy_FacetedStiffness(STATE_OLD,PARAM,MODEL,GRID);
+    PARAM                =    Calc_Anisotropy_Facet(STATE_OLD,PARAM,GRID,PHYS);
 
     % Full AC + CH COUPLED PREDICTOR
     [STATE_RAW,DIAG_RAW] =    PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
@@ -53,12 +53,14 @@ for it = 1:1e5
     STATE_LE0            =    Extend_AbsentPhaseC_Rim(STATE_LE0,PARAM);
     t_LE2                =    toc(t);
 
-    % FIXED-p CHEMISTRY CORRECTOR
+    % Fixed-p chemical corrector
     t                    =    tic;
     STATE_TRIAL          =    PF_CH_LECorrector_FixedP_Band_CS_offdiagM(STATE_OLD,STATE_LE0,PARAM,MODEL,GRID,PHYS,NUM);
     t_CHLE               =    toc(t);
 
     % TIME STEP UPDATE
+    dt_try               =    NUM.dt_phy;
+    time_old             =    NUM.time;
     [STATE,NUM]          =    Update_TimeStep_Soft(STATE,STATE_TRIAL,PARAM,MODEL,NUM);
     
     % PRINT TIME
@@ -66,7 +68,7 @@ for it = 1:1e5
     disp(['Total time:',num2str(t_total),' LE1:',num2str(t_LE1),' ACCH:',num2str(t_ACCH),' LE2:',num2str(t_LE2),' CH:',num2str(t_CHLE)])
 
 
-    % PLOTTING
+    %Plotting
     TIME(it)             =    NUM.time;
     DTPHY(it)            =    NUM.dt_phy;
     phase_ids            =    unique(MODEL.phase_index,'stable');
@@ -85,7 +87,7 @@ for it = 1:1e5
         PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         % PF_Plot([3,3,6],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,7],'c11',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,8],'c21',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,8],'phi1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         subplot(339);plot(PHASE(:,1))
         drawnow

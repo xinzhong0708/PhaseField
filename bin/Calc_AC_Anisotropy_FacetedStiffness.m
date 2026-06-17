@@ -1,28 +1,26 @@
 function PARAM = Calc_AC_Anisotropy_FacetedStiffness(STATE,PARAM,MODEL,GRID)
 %CALC_AC_ANISOTROPY_FACETEDSTIFFNESS Kundin-style faceted AC anisotropy.
 %
-% This function builds anisotropic AC coefficients:
+% This version is for the current scalar AC solver.
 %
+% It uses Kundin-type surface energy as the scalar multiplier:
+%
+%   sigma/sigma_ref = (A_ref/A_facet)
+%       * sqrt(sin(dtheta)^2 + q^2*cos(dtheta)^2) / q
+%
+% The true Kundin stiffness:
+%
+%   sigma* = sigma_ref * (A_facet/A_ref) * q^2
+%       / (sin(dtheta)^2 + q^2*cos(dtheta)^2)^(3/2)
+%
+% is stored as PARAM.sigma_star_fac only for diagnostics.
+%
+% Larger A means larger target facet area / more persistent facet.
+%
+% Outputs:
 %   PARAM.L_AC(:,:,ig)
 %   PARAM.Lm_AC(:,:,ig)
 %   PARAM.LK_AC(:,:,ig)
-%
-% Kundin-style idea:
-%
-%   1. Interface normal comes from grad(phi).
-%   2. Find nearest facet normal.
-%   3. Compute Kundin surface-energy factor from Eq. 15-16.
-%
-%   sigma / sigma_001 = (A_ref/A_facet) * sqrt(sin(dtheta)^2 + q^2*cos(dtheta)^2) / q
-%
-% Larger A_weight means larger equilibrium facet area, therefore lower
-% surface energy and a more persistent/longer facet.
-%
-% Notes:
-%   - facet.theta is facet-normal angle in crystal coordinates.
-%   - PARAM.theta_grain rotates crystal coordinates into lab coordinates.
-%   - q controls cusp sharpness. Smaller q gives stronger facets.
-%   - L itself is not scaled here; only Lm and LK are scaled.
 
 [ny,nx,Ngrain] = size(STATE.phi);
 
@@ -35,7 +33,7 @@ s_min       = 0.1;
 s_max       = 20.0;
 grad_min    = 1e-12;
 p_cut       = 1e-8;
-normalize_s = 1;
+normalize_s = 0;
 rsl         = 1.0;
 
 if isfield(PARAM,'aniso_nfold'),       nfold       = PARAM.aniso_nfold;       end
@@ -104,11 +102,11 @@ PARAM.L_AC  = zeros(ny,nx,Ngrain);
 PARAM.Lm_AC = zeros(ny,nx,Ngrain);
 PARAM.LK_AC = zeros(ny,nx,Ngrain);
 
-PARAM.sigma_star_fac = ones(ny,nx,Ngrain);
 PARAM.sigma_energy_fac = ones(ny,nx,Ngrain);
-PARAM.aniso_theta    = zeros(ny,nx,Ngrain);
-PARAM.aniso_factor   = ones(ny,nx,Ngrain);
-PARAM.aniso_ifacet   = zeros(ny,nx,Ngrain);
+PARAM.sigma_star_fac   = ones(ny,nx,Ngrain);
+PARAM.aniso_theta      = zeros(ny,nx,Ngrain);
+PARAM.aniso_factor     = ones(ny,nx,Ngrain);
+PARAM.aniso_ifacet     = zeros(ny,nx,Ngrain);
 
 sigma_fac_raw  = ones(ny,nx,Ngrain);
 sigma_star_raw = ones(ny,nx,Ngrain);
@@ -121,7 +119,7 @@ for ig = 1:Ngrain
 end
 
 % ------------------------------------------------------------
-% First pass: grain-wise solid-liquid surface energy factor
+% First pass: grain-wise surface-energy factor
 % ------------------------------------------------------------
 for alpha = 1:Ngrain
 
@@ -138,7 +136,8 @@ for alpha = 1:Ngrain
 
         iph = MODEL.phase_index(alpha);
 
-        [facet_theta,facet_A,sigma_ref,A_ref,q] = Local_Get_Facet_Data(PARAM,iph,nfold,q_default);
+        [facet_theta,facet_A,sigma_ref,A_ref,q] = ...
+            Local_Get_Facet_Data(PARAM,iph,nfold,q_default);
 
         % Convert lab normal angle into crystal frame.
         theta_crystal = Local_WrapHalfPi(theta_lab - theta_grain(alpha));
@@ -149,17 +148,15 @@ for alpha = 1:Ngrain
 
         den = sin(dtheta).^2 + q^2*cos(dtheta).^2;
 
-        % Kundin surface energy, Eq. 15 and Eq. 16.
-        % Normalize by the {001} value at dtheta = 0 so that {001}
-        % has factor 1, {100} has factor A001/A100, and directions
-        % between facets have larger energy.  This gives axis-aligned
-        % rectangular facets in this scalar AC discretization.
+        % Kundin surface-energy factor.
+        % At facet normal:
+        %   sigma_fac = A_ref/A_use
+        %
+        % Larger A_use gives lower surface energy and longer facet.
         sigma_energy = sigma_ref .* (A_ref./A_use) .* sqrt(den);
         sigma_fac    = sigma_energy ./ max(sigma_ref*q,eps);
 
-        % Keep the true Kundin stiffness only as a diagnostic.  Applying
-        % this directly as the scalar LK/Lm multiplier makes the diagonal
-        % directions artificially cheap and gives a diamond in this solver.
+        % True Kundin stiffness, diagnostic only.
         sigma_star = sigma_ref .* (A_use./A_ref) .* q^2 ./ den.^(3/2);
 
         sigma_fac(~mask)  = 1;
@@ -180,13 +177,13 @@ for alpha = 1:Ngrain
 
     PARAM.sigma_energy_fac(:,:,alpha) = sigma_fac;
     PARAM.sigma_star_fac(:,:,alpha)   = sigma_star;
-    PARAM.aniso_theta(:,:,alpha)    = dtheta;
-    PARAM.aniso_ifacet(:,:,alpha)   = ifacet;
+    PARAM.aniso_theta(:,:,alpha)      = dtheta;
+    PARAM.aniso_ifacet(:,:,alpha)     = ifacet;
 
 end
 
 % ------------------------------------------------------------
-% Second pass: pair effective stiffness
+% Second pass: pair effective surface-energy factor
 % ------------------------------------------------------------
 for alpha = 1:Ngrain
 
@@ -205,8 +202,7 @@ for alpha = 1:Ngrain
         % Use p_a*p_b in diffuse interfaces.
         w = p_a .* p_b;
 
-        % If the initial map is still sharp 0/1, p_a*p_b can be zero.
-        % Then fall back to overlapping gradient masks.
+        % For sharp 0/1 initial maps, p_a*p_b may be zero.
         if max(w(:)) <= p_cut
             w = double(interface_mask(:,:,alpha) & interface_mask(:,:,beta));
         end
@@ -223,8 +219,6 @@ for alpha = 1:Ngrain
 
         if iph_a == iph_b
 
-            % Same thermodynamic phase grain boundary.
-            % Default: isotropic grain boundary unless explicitly enabled.
             s_ab = ones(ny,nx);
 
             if isfield(PARAM,'aniso_same_phase') && PARAM.aniso_same_phase == 1
@@ -233,8 +227,6 @@ for alpha = 1:Ngrain
 
         else
 
-            % Solid-liquid or different-phase boundary.
-            % If only one side is faceted, use that side's surface-energy factor.
             if faceted_grain(alpha) && ~faceted_grain(beta)
 
                 s_ab = sig_a;
@@ -264,9 +256,6 @@ for alpha = 1:Ngrain
 
     s_eff(mask_pair) = s_sum(mask_pair)./w_sum(mask_pair);
 
-    % Kundin-style default: do not normalize.
-    % Normalization is useful numerically, but it weakens the absolute
-    % facet-area meaning.
     if normalize_s == 1
 
         mask_norm = mask_pair & isfinite(s_eff);
@@ -286,7 +275,7 @@ for alpha = 1:Ngrain
     PARAM.aniso_factor(:,:,alpha) = s_eff;
 
     % Apply anisotropic surface-energy factor to interface terms only.
-    % L_AC is the kinetic prefactor and is kept isotropic.
+    % Do not scale L_AC here.
     PARAM.L_AC(:,:,alpha)  = PARAM.L;
     PARAM.Lm_AC(:,:,alpha) = PARAM.Lm .* s_eff;
     PARAM.LK_AC(:,:,alpha) = PARAM.LK .* s_eff;
@@ -329,7 +318,6 @@ end
 function [facet_theta,facet_A,sigma_ref,A_ref,q] = ...
     Local_Get_Facet_Data(PARAM,iph,nfold,q_default)
 
-% Default equal facets in [0,pi)
 facet_theta = pi*(0:nfold-1)/nfold;
 facet_A     = ones(size(facet_theta));
 sigma_ref   = 1.0;
@@ -352,13 +340,13 @@ elseif isfield(facet,'theta_deg') && ~isempty(facet.theta_deg)
 
 end
 
-if isfield(facet,'A_weight') && ~isempty(facet.A_weight)
-
-    facet_A = facet.A_weight(:).';
-
-elseif isfield(facet,'A') && ~isempty(facet.A)
+if isfield(facet,'A') && ~isempty(facet.A)
 
     facet_A = facet.A(:).';
+
+elseif isfield(facet,'A_weight') && ~isempty(facet.A_weight)
+
+    facet_A = facet.A_weight(:).';
 
 else
 
@@ -370,22 +358,19 @@ if isfield(facet,'sigma_ref') && ~isempty(facet.sigma_ref)
     sigma_ref = facet.sigma_ref;
 end
 
-% Kundin uses {001} as reference.  The metadata loader currently sets
-% A_ref = max(A_weight), which is only safe when {001} is the largest
-% listed area.  Prefer the actual {001} row if hkl is available.
-iref = [];
-
-if isfield(facet,'hkl') && ~isempty(facet.hkl)
-    iref = Local_Find_HKL(facet.hkl,'001');
-end
-
-if ~isempty(iref)
-
-    A_ref = facet_A(iref);
-
-elseif isfield(facet,'A_ref') && ~isempty(facet.A_ref)
+if isfield(facet,'A_ref') && ~isempty(facet.A_ref)
 
     A_ref = facet.A_ref;
+
+elseif isfield(facet,'hkl') && ~isempty(facet.hkl)
+
+    i001 = Local_Find_HKL(facet.hkl,'001');
+
+    if ~isempty(i001)
+        A_ref = facet_A(i001);
+    else
+        A_ref = facet_A(1);
+    end
 
 elseif ~isempty(facet_A)
 
@@ -402,7 +387,7 @@ if numel(facet_A) ~= numel(facet_theta)
 end
 
 if any(facet_A <= 0)
-    error('All facet A_weight values must be positive.')
+    error('All facet A values must be positive.')
 end
 
 if A_ref <= 0
@@ -460,9 +445,6 @@ end
 
 
 function a = Local_WrapHalfPi(a)
-%LOCAL_WRAPHALFPI Wrap angle difference for unoriented plane normals.
-%
-% theta and theta + pi represent the same crystal plane normal.
 
 a = mod(a + pi/2,pi) - pi/2;
 

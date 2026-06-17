@@ -15,12 +15,11 @@ PHYS.E_sc           =  E_sc;
 PHYS.t_sc           =  1;                                                   % Time scale
 PHYS.L_sc           =  1e-6;                                                % Length scale
 PHYS.vref           =  2e-5;
-PHYS.l              =  3*GRID.dx/PHYS.L_sc;                                 % interface thickness (m)
+PHYS.l              =  2*GRID.dx;                                           % interface thickness (m)
 PHYS.sigma          =  0.50/(PHYS.E_sc*PHYS.L_sc);                          % surface energy (J/m^2)
 PHYS.kappa          =  0e-6/(PHYS.E_sc*PHYS.L_sc^2);                        % 4th order term, can be set to 0 if no solvus
 PHYS.D_esti         =  1e-12;
-PHYS.chi_ref        =  1e-0;
-PHYS.M0             =  PHYS.D_esti*PHYS.t_sc/PHYS.L_sc^2*PHYS.chi_ref;
+PHYS.M0             =  1e-25*PHYS.t_sc*PHYS.E_sc/PHYS.L_sc^2;
 sc                  =  1;
 PHYS.M_phs          = [PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc PHYS.M0/sc
                        PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0    PHYS.M0
@@ -36,13 +35,13 @@ PHYS.L              =  4*PHYS.m/3/PHYS.kap/(PHYS.dceq^2/PHYS.M0);
 PHYS.eta            =  eta;
 
 %NUMERICS
-NUM.dt_phy          =    100/PHYS.t_sc;
+NUM.dt_phy          =    200/PHYS.t_sc;
 NUM.dt_max          =    1e6/PHYS.t_sc;
 NUM.dt_min          =  1e-16/PHYS.t_sc; 
 NUM.t_tot           =    1e5/PHYS.t_sc;
 NUM.t_phy           =  0;
-NUM.dE_target       =  3e-2;
-NUM.dp_target       =  3e-2;
+NUM.dE_target       =  6e-2;
+NUM.dp_target       =  6e-2;
 NUM.dmu_target      =  1e2;
 NUM.time            =  0;
 NUM.dt_good_count   =  0;
@@ -122,8 +121,8 @@ STATE.LE_state      = [   ];
 
 %P-T-t path
 PARAM.PT.t_path     =  linspace(0   ,1e9  ,100);
-PARAM.PT.T_path     =  linspace(2120,2120 ,100);
-PARAM.PT.P_path     =  linspace(1   ,1    ,100)*1e9;
+PARAM.PT.T_path     =  linspace(2158,2158 ,100);
+PARAM.PT.P_path     =  linspace(1.5 ,1.5  ,100)*1e9;
 
 %DISPLAY COMPOSITION
 % disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all') mean(STATE.E{4},'all') mean(STATE.E{end},'all')])
@@ -137,17 +136,17 @@ PARAM.PT.P_path     =  linspace(1   ,1    ,100)*1e9;
 % PARAM.aniso_max   = 10;
 % PARAM.theta_grain = zeros(1,size(STATE.p,3));
 
-iph                        = 1;
-PARAM.aniso_phase          = 1;
+% iph                        = 1;
+% PARAM.aniso_phase          = 1;
+% % 
+% % Olivine a-c section
+% % theta is the facet normal angle in the x-y model plane.
+% a_ol = 4.756;     % relative a lattice length
+% c_ol = 5.981;     % relative c lattice length
 % 
-% Olivine a-c section
-% theta is the facet normal angle in the x-y model plane.
-a_ol = 4.756;     % relative a lattice length
-c_ol = 5.981;     % relative c lattice length
-
-theta_100 = 0;
-theta_001 = pi/2;
-theta_101 = atan2(1/c_ol,1/a_ol);
+% theta_100 = 0;
+% theta_001 = pi/2;
+% theta_101 = atan2(1/c_ol,1/a_ol);
 
 % PARAM.facet(iph).hkl       = {'100','101','10-1','001'};
 % PARAM.facet(iph).theta     = [theta_100, theta_101, -theta_101, theta_001];
@@ -164,20 +163,20 @@ theta_101 = atan2(1/c_ol,1/a_ol);
 % PARAM.aniso_max            = 10.0;
 % PARAM.aniso_normalize      = 1;
 
-PARAM.facet(iph).hkl       = {'100','001'};
-PARAM.facet(iph).theta     = [theta_100, theta_001];
-
-% Relative target facet importance.
-% Larger A means stronger/more persistent facet in your implementation.
-PARAM.facet(iph).A         = [1.0, 0.5];
-
-PARAM.facet(iph).sigma_ref = 1.0;
-PARAM.facet(iph).A_ref     = 1.0;
-PARAM.facet(iph).q         = 0.25;
-
-PARAM.aniso_min            = 0.2;
-PARAM.aniso_max            = 10.0;
-PARAM.aniso_normalize      = 1;
+% PARAM.facet(iph).hkl       = {'100','001'};
+% PARAM.facet(iph).theta     = [theta_100, theta_001];
+% 
+% % Relative target facet importance.
+% % Larger A means stronger/more persistent facet in your implementation.
+% PARAM.facet(iph).A         = [1.0, 0.5];
+% 
+% PARAM.facet(iph).sigma_ref = 1.0;
+% PARAM.facet(iph).A_ref     = 1.0;
+% PARAM.facet(iph).q         = 0.25;
+% 
+% PARAM.aniso_min            = 0.2;
+% PARAM.aniso_max            = 10.0;
+% PARAM.aniso_normalize      = 1;
 
 % load step1
 % sc                  =  200;
@@ -191,7 +190,15 @@ PARAM.aniso_normalize      = 1;
 % PARAM.PT.P_path     =  linspace(0.8,0.8 ,100)*1e9;
 % NUM.dt_phy          =  NUM.dt_phy/2;
 
-for it = 1:1e5
+
+PARAM.aniso_phase       = 1;
+PARAM.aniso_nfold       = 4;
+PARAM.aniso_q           = 0.2;
+PARAM.theta_grain       = zeros(1,2);
+
+
+
+for it = 1:100
     if mod(it,200)==0
         save(num2str(it))
     end
@@ -220,11 +227,10 @@ for it = 1:1e5
     PARAM                =    Update_PF_SolverMasks(PARAM,STATE_OLD,MODEL,GRID,PHYS,NUM,'ACCH');
     
     % UPDATE M and L
-    PARAM.M              =    repmat({PHYS.M0*ones(GRID.ny,GRID.nx)},1,PARAM.Ne);
-    % PARAM                =    Compute_M_And_L(STATE,PARAM,MODEL,PHYS);
+    PARAM                =    Compute_M_And_L(STATE,PARAM,MODEL,PHYS);
 
     % CALCULATE FACET
-    PARAM                =    Calc_AC_Anisotropy_FacetedStiffness(STATE_OLD,PARAM,MODEL,GRID);
+    % PARAM                =    Calc_AC_Anisotropy_FacetedStiffness(STATE_OLD,PARAM,MODEL,GRID);
 
     % Full AC + CH COUPLED PREDICTOR
     [STATE_RAW,DIAG_RAW] =    PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);

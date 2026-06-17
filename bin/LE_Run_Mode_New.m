@@ -17,7 +17,7 @@ p_off      =  4e-3;
 Pmax       =  4;
 
 %Local equilibrium parameters
-alpha_LE   = [0.8 0.6 0.4 0.3];
+alpha_LE   = [0.9 0.7 0.4 0.3];
 iter_LE    = [100 100 100 100];
 iter_GP    = [100 100 100 100];
 

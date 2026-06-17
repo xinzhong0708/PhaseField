@@ -33,14 +33,14 @@ metadata_file = 'MetaData.xlsx';
 phs_name = {'Olivine','Melt'};
 
 % Domain
-Lx = 5e-5;
-Ly = 5e-5;
-nx = 100;
-ny = 100;
+Lx = 2e-5;
+Ly = 2e-5;
+nx = 120;
+ny = 120;
 
 % Olivine seeds in melt
 N_olivine_seed = 1;
-olivine_frac   = 0.01;
+olivine_frac   = 0.012;
 min_gap_fac    = 3.50;      % minimum center distance relative to 2*radius
 rng_seed       = 1;
 

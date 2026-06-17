@@ -1,7 +1,7 @@
 clear; clf; colormap(jet(256))
 % 
 %Load data
-load test
+load temp
 
 %% Solve it with the solver
 NUM.norm_phi       =  0;
