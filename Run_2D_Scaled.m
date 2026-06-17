@@ -7,7 +7,12 @@ load Map2d.mat
 %LOAD METADATA
 [PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata('Metadata.xlsx',GRID,MODEL,STATE,PARAM.eta,PARAM);
 
-%START TIME STEPS
+% %START TIME STEPS
+% PARAM.aniso_phase       = 1;
+% PARAM.aniso_nfold       = 4;
+% PARAM.aniso_q           = 0.2;
+% PARAM.theta_grain       = zeros(1,2);
+
 for it = 1:1e5
     % SAVE CHECKPOINT
     if mod(it,200)==0
@@ -38,10 +43,13 @@ for it = 1:1e5
     PARAM                =    Update_PF_SolverMasks(PARAM,STATE_OLD,MODEL,GRID,PHYS,NUM,'ACCH');
     
     % UPDATE M and L
-    PARAM                =    Compute_M_And_L(STATE,PARAM,MODEL,PHYS);
+    PARAM                =    Compute_M_And_L(STATE_OLD,PARAM,MODEL,PHYS);
 
     % CALCULATE FACET
-    PARAM                =    Calc_Anisotropy_Facet(STATE_OLD,PARAM,GRID,PHYS);
+    PARAM.aniso_scale_chemical = 0;   % physical capillary mode, do not scale chemical driving force
+    PARAM                =    Calc_Anisotropy_FacetAngular(STATE_OLD,PARAM,GRID,PHYS,MODEL);
+
+    % PARAM                =    Calc_Anisotropy_Facet(STATE_OLD,PARAM,GRID,PHYS);
 
     % Full AC + CH COUPLED PREDICTOR
     [STATE_RAW,DIAG_RAW] =    PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);

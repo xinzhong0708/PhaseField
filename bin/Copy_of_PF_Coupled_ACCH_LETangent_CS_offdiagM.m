@@ -373,16 +373,7 @@ for alpha = 1:Ngrain
 
     % RHS on active nodes only
     S_a    = S_AC{alpha};
-
-    if isfield(PARAM,'DivAnisoAngular_AC') && ...
-            ~isempty(PARAM.DivAnisoAngular_AC) && ...
-            size(PARAM.DivAnisoAngular_AC,3) >= alpha
-        T_a = PARAM.DivAnisoAngular_AC(:,:,alpha);
-    else
-        T_a = zeros(ny,nx);
-    end
-    R(row) = DivLKGrad_phi + T_a(idx_a) + S_a(idx_a);
-
+    R(row) = DivLKGrad_phi + S_a(idx_a);
 
     Aac = PARAM.A_ac(idx_a);
 

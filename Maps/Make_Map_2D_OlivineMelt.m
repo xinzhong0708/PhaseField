@@ -35,12 +35,12 @@ phs_name = {'Olivine','Melt'};
 % Domain
 Lx = 2e-5;
 Ly = 2e-5;
-nx = 120;
-ny = 120;
+nx = 90;
+ny = 90;
 
 % Olivine seeds in melt
 N_olivine_seed = 1;
-olivine_frac   = 0.012;
+olivine_frac   = 0.005;
 min_gap_fac    = 3.50;      % minimum center distance relative to 2*radius
 rng_seed       = 1;
 

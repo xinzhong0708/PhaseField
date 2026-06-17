@@ -267,14 +267,26 @@ for ip = 1:Np
     % Apply anisotropic stiffness
     S = PARAM.aniso_S(:,:,ip);
 
+    % PARAM.LK_iso(:,:,ip)    = Lloc .* kaploc;
+    % PARAM.Lm_iso(:,:,ip)    = Lloc .* mloc;
+    % 
+    % PARAM.LK_aniso(:,:,ip)  = PARAM.LK_iso(:,:,ip) .* S;
+    % PARAM.Lm_aniso(:,:,ip)  = PARAM.Lm_iso(:,:,ip) .* S;
+    % 
+    % % Chemical driving force should use unscaled L
+    % PARAM.L_AC(:,:,ip)      = Lloc;
+
+
     PARAM.LK_iso(:,:,ip)    = Lloc .* kaploc;
     PARAM.Lm_iso(:,:,ip)    = Lloc .* mloc;
 
     PARAM.LK_aniso(:,:,ip)  = PARAM.LK_iso(:,:,ip) .* S;
     PARAM.Lm_aniso(:,:,ip)  = PARAM.Lm_iso(:,:,ip) .* S;
 
-    % Chemical driving force should use unscaled L
-    PARAM.L_AC(:,:,ip)      = Lloc;
+    % Legacy-style kinetic anisotropy:
+    % scale chemical driving force by the same anisotropy factor.
+    PARAM.L_AC(:,:,ip)      = Lloc .* S;
+
 
     % Base m used to remove m from MODEL.dgdphi if needed
     PARAM.m_AC_base(:,:,ip) = mloc;
