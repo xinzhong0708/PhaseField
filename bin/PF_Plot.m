@@ -8,13 +8,22 @@ function PF_Plot(pos,what,STATE,GRID,MODEL,TIME,DTPHY,PHASE)
 %   PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
 %   PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
 %   PF_Plot([3,3,6],'p2',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-%   PF_Plot([3,3,8],'c21',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+%   PF_Plot([3,3,7],'c51',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+%   PF_Plot([3,3,8],'e51',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
 %   PF_Plot([3,3,9],'Phase%',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+%
+% Notes:
+%   c51 means thermodynamic phase 5, composition variable 1.
+%   e51 means thermodynamic phase 5, element variable 1.
+%   For multi-digit indices use c5_10 or e5_10.
+%   c51/e51 are phase-weighted over all grains belonging to phase 5.
+%   normal c plots hide pixels with phase p < 1e-2; c51all plots everywhere.
+%   omega plots are unmasked and shown on all grids.
 
 subplot(pos(1),pos(2),pos(3)); cla
 
-what = strtrim(what);
-w    = lower(what);
+what0 = strtrim(what);
+w     = lower(what0);
 
 phase_index = MODEL.phase_index(:).';
 phase_ids   = unique(phase_index,'stable');
@@ -36,13 +45,20 @@ for iph = 1:Nphase
     p_phase(:,:,iph) = sum(STATE.p(:,:,grains),3);
 end
 
+%c plotting cutoff. Normal c plots hide regions where phase amount is small.
+%c...all still plots everywhere.
+c_plot_p_cut = 1e-1;
+
 % ------------------------------------------------------------
 % dt plot
 % ------------------------------------------------------------
 if strcmp(w,'dt')
 
     n = find(DTPHY(:) ~= 0,1,'last');
-    if isempty(n); n = numel(DTPHY); end
+
+    if isempty(n)
+        n = numel(DTPHY);
+    end
 
     plot(DTPHY(1:n),'b.')
     title('dt')
@@ -56,13 +72,76 @@ end
 if strcmp(w,'phase%')
 
     n = find(any(PHASE ~= 0,2) | TIME(:) ~= 0,1,'last');
-    if isempty(n); n = size(PHASE,1); end
+
+    if isempty(n)
+        n = size(PHASE,1);
+    end
 
     plot(TIME(1:n),PHASE(1:n,1:Nphase),'.-')
     legend(phs_name,'Location','best')
     title('Phase proportion')
     xlabel('time')
     ylabel('phase fraction')
+    return
+
+end
+
+% ------------------------------------------------------------
+% Phase proportion as stacked color blocks with black boundaries
+% ------------------------------------------------------------
+if strcmp(w,'phasestack') || strcmp(w,'phaseblock')
+
+    n = find(any(PHASE ~= 0,2) | TIME(:) ~= 0,1,'last');
+
+    if isempty(n)
+        n = size(PHASE,1);
+    end
+
+    Y = PHASE(1:n,1:Nphase);
+    X = TIME(1:n);
+
+    if all(X == 0)
+        X = (1:n).';
+        xlabel_text = 'iteration';
+    else
+        xlabel_text = 'time';
+    end
+
+    s = sum(Y,2);
+    good = s > eps;
+
+    for ip = 1:Nphase
+        Y(good,ip) = Y(good,ip)./s(good);
+    end
+
+    h = area(X,Y);
+    set(h,'LineStyle','none')
+
+    cmap = jet(Nphase);
+
+    for ip = 1:Nphase
+        h(ip).FaceColor = cmap(ip,:);
+    end
+
+    hold on
+
+    Ycum = cumsum(Y,2);
+
+    for ip = 1:Nphase-1
+        plot(X,Ycum(:,ip),'k-','LineWidth',1.0)
+    end
+
+    plot(X,zeros(size(X)),'k-','LineWidth',0.8)
+    plot(X,ones(size(X)),'k-','LineWidth',0.8)
+
+    hold off
+
+    ylim([0 1])
+    xlim([min(X) max(X)])
+    xlabel(xlabel_text)
+    ylabel('phase fraction')
+    title('Phase proportion')
+    legend(h,phs_name,'Location','eastoutside')
     return
 
 end
@@ -92,15 +171,24 @@ if strcmp(w,'phase2d')
 end
 
 % ------------------------------------------------------------
-% E component, e.g. E1, E2
+% Conserved E component, e.g. E1
+% Use uppercase E to avoid conflict with phase-resolved e51.
+% Lowercase e1 is kept as a backward-compatible alias.
 % ------------------------------------------------------------
-tok = regexp(w,'^e(\d+)$','tokens');
+tok = regexp(what0,'^E(\d+)$','tokens');
+
+if isempty(tok)
+    tok = regexp(w,'^e(\d+)$','tokens');
+end
 
 if ~isempty(tok)
 
     ie = str2double(tok{1}{1});
+
     pcolor(GRID.x,GRID.y,STATE.E{ie})
-    shading interp; axis equal tight; colorbar
+    shading interp
+    axis equal tight
+    colorbar
     title(sprintf('E%d',ie))
     xlabel('x \mum')
     ylabel('y \mum')
@@ -116,8 +204,11 @@ tok = regexp(w,'^mu_?e?(\d+)$','tokens');
 if ~isempty(tok)
 
     ie = str2double(tok{1}{1});
+
     pcolor(GRID.x,GRID.y,STATE.mu_e{ie})
-    shading interp; axis equal tight; colorbar
+    shading interp
+    axis equal tight
+    colorbar
     title(sprintf('\\mu_e%d',ie))
     xlabel('x \mum')
     ylabel('y \mum')
@@ -133,8 +224,12 @@ tok = regexp(w,'^p(\d+)$','tokens');
 if ~isempty(tok)
 
     iph = str2double(tok{1}{1});
+    Check_Phase_Index(iph,Nphase,what0)
+
     pcolor(GRID.x,GRID.y,p_phase(:,:,iph))
-    shading interp; axis equal tight; colorbar
+    shading interp
+    axis equal tight
+    colorbar
     title(sprintf('p %s',phs_name{iph}))
     xlabel('x \mum')
     ylabel('y \mum')
@@ -150,11 +245,15 @@ tok = regexp(w,'^phi(\d+)$','tokens');
 if ~isempty(tok)
 
     iph = str2double(tok{1}{1});
-    grains = find(phase_index == phase_ids(iph));
+    Check_Phase_Index(iph,Nphase,what0)
+
+    grains    = find(phase_index == phase_ids(iph));
     phi_phase = sum(STATE.phi(:,:,grains),3);
 
     pcolor(GRID.x,GRID.y,phi_phase)
-    shading interp; axis equal tight; colorbar
+    shading interp
+    axis equal tight
+    colorbar
     title(sprintf('\\phi %s',phs_name{iph}))
     xlabel('x \mum')
     ylabel('y \mum')
@@ -163,80 +262,88 @@ if ~isempty(tok)
 end
 
 % ------------------------------------------------------------
-% c phase/endmember, e.g.
-%   c21      = phase 2, endmember 1, masked by phase 2
-%   c2_1     = same, useful for multi-digit indices
-%   c21all   = plot everywhere without phase mask
-%   c2_1all  = plot everywhere without phase mask
+% c phase/component, e.g.
+%   c51      = phase 5, component 1, all grains of phase 5
+%   c5_1     = same, useful for multi-digit indices
+%   c51all   = no phase mask
+%   c5_1all  = no phase mask
 % ------------------------------------------------------------
-plot_all = false;
+[ok,iph,ic,plot_all] = Parse_Phase_Component(w,'c');
 
-tok = regexp(w,'^c(\d+)_(\d+)all$','tokens');
+if ok
 
-if isempty(tok)
-    tok = regexp(w,'^c(\d)(\d)all$','tokens');
-end
-
-if ~isempty(tok)
-    plot_all = true;
-else
-    tok = regexp(w,'^c(\d+)_(\d+)$','tokens');
-
-    if isempty(tok)
-        tok = regexp(w,'^c(\d)(\d)$','tokens');
-    end
-end
-
-if ~isempty(tok)
-
-    iph = str2double(tok{1}{1});
-    ic  = str2double(tok{1}{2});
+    Check_Phase_Index(iph,Nphase,what0)
 
     grains = find(phase_index == phase_ids(iph));
 
-    % Phase-weighted c for this thermodynamic phase.
-    % This is safer than just taking the first grain.
-    c_plot = zeros(size(STATE.p(:,:,1)));
-    wsum   = zeros(size(STATE.p(:,:,1)));
-
-    for ig = grains
-        wloc   = STATE.p(:,:,ig);
-        c_plot = c_plot + wloc .* STATE.c{ig}{ic};
-        wsum   = wsum   + wloc;
+    if isempty(grains)
+        error('PF_Plot: phase %d has no grains.',iph)
     end
 
-    good = wsum > eps;
-    c_plot(good) = c_plot(good) ./ wsum(good);
+    c_plot = PhaseWeighted_CellField(STATE.c,STATE.p,grains,ic);
 
-    % Mask out regions where this phase is not present
     if ~plot_all
-        p_cut = 5e-1;
-        c_plot(wsum < p_cut) = NaN;
+        c_plot(p_phase(:,:,iph) < c_plot_p_cut) = NaN;
     end
 
-    pcolor(GRID.x,GRID.y,c_plot)
-    shading interp
-    axis equal tight
-    colorbar
+    Plot_Field(GRID,c_plot)
 
     if plot_all
-        title(sprintf('c%d%d %s all',iph,ic,phs_name{iph}))
+        title(sprintf('c%d%d %s all grains',iph,ic,phs_name{iph}))
     else
-        title(sprintf('c%d%d %s masked',iph,ic,phs_name{iph}))
+        title(sprintf('c%d%d %s, p >= %.2g',iph,ic,phs_name{iph},c_plot_p_cut))
     end
-
-    xlabel('x \mum')
-    ylabel('y \mum')
 
     return
 
 end
 
 % ------------------------------------------------------------
-% omega, e.g.
-%   omg1  = omega of phase 1
-%   omg12 = omega phase 1 - phase 2
-% also supports omg1_2
+% e phase/component, e.g.
+%   e51      = phase 5, element/component 1, all grains of phase 5
+%   e5_1     = same, useful for multi-digit indices
+%   e51all   = no phase mask
+%   e5_1all  = no phase mask
+% ------------------------------------------------------------
+[ok,iph,ie,plot_all] = Parse_Phase_Component(w,'e');
+
+if ok
+
+    Check_Phase_Index(iph,Nphase,what0)
+
+    if ~isfield(STATE,'e') || isempty(STATE.e)
+        error('PF_Plot: STATE.e is empty. Run Calc_e or LE first.')
+    end
+
+    grains = find(phase_index == phase_ids(iph));
+
+    if isempty(grains)
+        error('PF_Plot: phase %d has no grains.',iph)
+    end
+
+    e_plot = PhaseWeighted_CellField(STATE.e,STATE.p,grains,ie);
+
+    if ~plot_all
+        e_plot(p_phase(:,:,iph) <= eps) = NaN;
+    end
+
+    Plot_Field(GRID,e_plot)
+
+    if plot_all
+        title(sprintf('e%d%d %s all grains',iph,ie,phs_name{iph}))
+    else
+        title(sprintf('e%d%d %s',iph,ie,phs_name{iph}))
+    end
+
+    return
+
+end
+
+% ------------------------------------------------------------
+% ------------------------------------------------------------
+% omega difference on coexisting grids only, e.g.
+%   omg12   = local omega phase 1 - phase 2, only where both coexist
+%   omg1_2  = same
 % ------------------------------------------------------------
 tok = regexp(w,'^omg(\d+)_(\d+)$','tokens');
 
@@ -249,184 +356,300 @@ if ~isempty(tok)
     iph1 = str2double(tok{1}{1});
     iph2 = str2double(tok{1}{2});
 
+    Check_Phase_Index(iph1,Nphase,what0)
+    Check_Phase_Index(iph2,Nphase,what0)
+
     grains1 = find(phase_index == phase_ids(iph1));
     grains2 = find(phase_index == phase_ids(iph2));
 
-    omg1 = mean(STATE.omg(:,:,grains1),3);
-    omg2 = mean(STATE.omg(:,:,grains2),3);
+    if isempty(grains1) || isempty(grains2)
+        error('PF_Plot: one of the requested phases has no grains.')
+    end
 
-    pcolor(GRID.x,GRID.y,omg1 - omg2)
-    shading interp; axis equal tight; colorbar
-    title(sprintf('\\omega_{%s} - \\omega_{%s}',phs_name{iph1},phs_name{iph2}))
-    xlabel('x \mum')
-    ylabel('y \mum')
+    % Local phase-weighted omega, not global phase average
+    omg1 = PhaseWeighted_ArrayField(STATE.omg,STATE.p,grains1);
+    omg2 = PhaseWeighted_ArrayField(STATE.omg,STATE.p,grains2);
+
+    % Only show true local coexistence grids
+    omg_p_cut = 1e-3;
+    coexist = p_phase(:,:,iph1) > omg_p_cut & ...
+              p_phase(:,:,iph2) > omg_p_cut;
+
+    domg = omg1 - omg2;
+    domg(~coexist) = NaN;
+
+    Plot_Field(GRID,domg)
+    title(sprintf('\\omega_{%s} - \\omega_{%s}, coexist p > %.0e', ...
+        phs_name{iph1},phs_name{iph2},omg_p_cut))
     return
 
 end
 
-tok = regexp(w,'^omg(\d+)$','tokens');
+
+tok = regexp(w,'^omg(\d+)(avg)?$','tokens');
 
 if ~isempty(tok)
 
     iph = str2double(tok{1}{1});
+    opt = '';
+
+    if numel(tok{1}) >= 2 && ~isempty(tok{1}{2})
+        opt = tok{1}{2};
+    end
+
+    Check_Phase_Index(iph,Nphase,what0)
+
     grains = find(phase_index == phase_ids(iph));
-    omg_phase = mean(STATE.omg(:,:,grains),3);
 
-    pcolor(GRID.x,GRID.y,omg_phase)
-    shading interp; axis equal tight; colorbar
-    title(sprintf('\\omega %s',phs_name{iph}))
-    xlabel('x \mum')
-    ylabel('y \mum')
-    return
-
-end
-
-
-% ------------------------------------------------------------
-% ------------------------------------------------------------
-% Phase proportion as stacked color blocks with black boundaries
-%   x axis: time
-%   y axis: cumulative phase fraction from 0 to 1
-%
-% Call:
-%   PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-%   PF_Plot([3,3,9],'PhaseBlock',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-% ------------------------------------------------------------
-if strcmp(w,'phasestack') || strcmp(w,'phaseblock')
-
-    n = find(any(PHASE ~= 0,2) | TIME(:) ~= 0,1,'last');
-
-    if isempty(n)
-        n = size(PHASE,1);
+    if isempty(grains)
+        error('PF_Plot: phase %d has no grains.',iph)
     end
 
-    Y = PHASE(1:n,1:Nphase);
-    X = TIME(1:n);
-
-    % If TIME is still empty/zero, use iteration number
-    if all(X == 0)
-        X = (1:n).';
-        xlabel_text = 'iteration';
+    if strcmp(opt,'avg')
+        omg_phase = PhaseMean_ArrayField(STATE.omg,grains);
+        Plot_Field(GRID,omg_phase)
+        title(sprintf('\\omega %s avg grains',phs_name{iph}))
     else
-        xlabel_text = 'time';
+        omg_phase = LocalGrain_ArrayField(STATE.omg,STATE.p,grains,omg_local_p_cut);
+        Plot_Field(GRID,omg_phase)
+        title(sprintf('\\omega %s local grains',phs_name{iph}))
     end
-
-    % Normalize each row to exactly sum to 1
-    s = sum(Y,2);
-    good = s > eps;
-
-    for ip = 1:Nphase
-        Y(good,ip) = Y(good,ip) ./ s(good);
-    end
-
-    % Colored stacked blocks
-    h = area(X,Y);
-    set(h,'LineStyle','none')
-
-    cmap = jet(Nphase);
-
-    for ip = 1:Nphase
-        h(ip).FaceColor = cmap(ip,:);
-    end
-
-    hold on
-
-    % Black boundaries between cumulative phase blocks
-    Ycum = cumsum(Y,2);
-
-    for ip = 1:Nphase-1
-        plot(X,Ycum(:,ip),'k-','LineWidth',1.0)
-    end
-
-    % Optional black top and bottom frame
-    plot(X,zeros(size(X)),'k-','LineWidth',0.8)
-    plot(X,ones(size(X)),'k-','LineWidth',0.8)
-
-    hold off
-
-    ylim([0 1])
-    xlim([min(X) max(X)])
-    xlabel(xlabel_text)
-    ylabel('phase fraction')
-    title('Phase proportion')
-    legend(h,phs_name,'Location','eastoutside')
-
-    return
-
-end
-
-% ------------------------------------------------------------
-% Phase proportion as stacked color blocks with black boundaries
-%   x axis: time
-%   y axis: cumulative phase fraction from 0 to 1
-%
-% Call:
-%   PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-%   PF_Plot([3,3,9],'PhaseBlock',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-% ------------------------------------------------------------
-if strcmp(w,'phasestack') || strcmp(w,'phaseblock')
-
-    n = find(any(PHASE ~= 0,2) | TIME(:) ~= 0,1,'last');
-
-    if isempty(n)
-        n = size(PHASE,1);
-    end
-
-    Y = PHASE(1:n,1:Nphase);
-    X = TIME(1:n);
-
-    % If TIME is still empty/zero, use iteration number
-    if all(X == 0)
-        X = (1:n).';
-        xlabel_text = 'iteration';
-    else
-        xlabel_text = 'time';
-    end
-
-    % Normalize each row to exactly sum to 1
-    s = sum(Y,2);
-    good = s > eps;
-
-    for ip = 1:Nphase
-        Y(good,ip) = Y(good,ip) ./ s(good);
-    end
-
-    % Colored stacked blocks
-    h = area(X,Y);
-    set(h,'LineStyle','none')
-
-    cmap = jet(Nphase);
-
-    for ip = 1:Nphase
-        h(ip).FaceColor = cmap(ip,:);
-    end
-
-    hold on
-
-    % Black boundaries between cumulative phase blocks
-    Ycum = cumsum(Y,2);
-
-    for ip = 1:Nphase-1
-        plot(X,Ycum(:,ip),'k-','LineWidth',1.0)
-    end
-
-    % Optional black top and bottom frame
-    plot(X,zeros(size(X)),'k-','LineWidth',0.8)
-    plot(X,ones(size(X)),'k-','LineWidth',0.8)
-
-    hold off
-
-    ylim([0 1])
-    xlim([min(X) max(X)])
-    xlabel(xlabel_text)
-    ylabel('phase fraction')
-    title('Phase proportion')
-    legend(h,phs_name,'Location','eastoutside')
 
     return
 
 end
 
 error('Unknown plot request: %s',what)
+
+end
+
+% =========================================================================
+% Local helpers
+% =========================================================================
+function [ok,iph,ic,plot_all] = Parse_Phase_Component(w,prefix)
+
+ok       = false;
+iph      = [];
+ic       = [];
+plot_all = false;
+
+expr = ['^' prefix '(\d+)_(\d+)(all)?$'];
+tok  = regexp(w,expr,'tokens');
+
+if isempty(tok)
+    expr = ['^' prefix '(\d)(\d)(all)?$'];
+    tok  = regexp(w,expr,'tokens');
+end
+
+if isempty(tok)
+    return
+end
+
+ok  = true;
+iph = str2double(tok{1}{1});
+ic  = str2double(tok{1}{2});
+
+if numel(tok{1}) >= 3 && ~isempty(tok{1}{3})
+    plot_all = true;
+end
+
+end
+
+
+function A = PhaseWeighted_CellField(F,p,grains,ic)
+
+[ny,nx,~] = size(p);
+
+A    = zeros(ny,nx);
+wsum = zeros(ny,nx);
+
+for ig = grains
+
+    if ic > numel(F{ig})
+        error('PF_Plot: component %d does not exist for grain %d.',ic,ig)
+    end
+
+    wloc = p(:,:,ig);
+    A    = A    + wloc.*F{ig}{ic};
+    wsum = wsum + wloc;
+
+end
+
+good = wsum > eps;
+
+A(good)  = A(good)./wsum(good);
+A(~good) = NaN;
+
+end
+
+
+function A = PhaseWeighted_ArrayField(F,p,grains)
+
+[ny,nx,~] = size(p);
+
+A    = zeros(ny,nx);
+wsum = zeros(ny,nx);
+
+for ig = grains
+
+    wloc = p(:,:,ig);
+    A    = A    + wloc.*F(:,:,ig);
+    wsum = wsum + wloc;
+
+end
+
+good = wsum > eps;
+
+A(good)  = A(good)./wsum(good);
+A(~good) = NaN;
+
+end
+
+
+
+function A = PhaseMean_ArrayField(F,grains)
+
+if isempty(grains)
+    error('PF_Plot: empty grain list.')
+end
+
+A = mean(F(:,:,grains),3);
+
+end
+
+
+function A = LocalGrain_ArrayField(F,p,grains,p_cut)
+
+[ny,nx,~] = size(p);
+
+idmap = LocalGrainID_ByP_Local(p,grains,p_cut);
+idmap = Fill_GrainID_Nearest_Local(idmap);
+
+A = NaN(ny,nx);
+
+for ig = grains
+
+    mask = idmap == ig;
+
+    if any(mask(:))
+        tmp = F(:,:,ig);
+        A(mask) = tmp(mask);
+    end
+end
+
+end
+
+
+function idmap = LocalGrainID_ByP_Local(p,grains,p_cut)
+
+[ny,nx,~] = size(p);
+
+if isempty(grains)
+    idmap = zeros(ny,nx);
+    return
+end
+
+[pmax,iloc] = max(p(:,:,grains),[],3);
+
+idmap = zeros(ny,nx);
+
+for k = 1:numel(grains)
+    idmap(iloc == k & pmax > p_cut) = grains(k);
+end
+
+end
+
+
+function idmap = Fill_GrainID_Nearest_Local(idmap)
+
+[ny,nx] = size(idmap);
+
+if ~any(idmap(:) > 0)
+    return
+end
+
+for it = 1:(ny+nx)
+
+    missing = idmap == 0;
+
+    if ~any(missing(:))
+        break
+    end
+
+    old = idmap;
+
+    L = idmap(:,[1,1:nx-1]);
+    R = idmap(:,[2:nx,nx]);
+    U = idmap([1,1:ny-1],:);
+    D = idmap([2:ny,ny],:);
+
+    take = missing & L > 0;
+    idmap(take) = L(take);
+
+    missing = idmap == 0;
+    take = missing & R > 0;
+    idmap(take) = R(take);
+
+    missing = idmap == 0;
+    take = missing & U > 0;
+    idmap(take) = U(take);
+
+    missing = idmap == 0;
+    take = missing & D > 0;
+    idmap(take) = D(take);
+
+    if isequal(old,idmap)
+        break
+    end
+end
+
+end
+
+
+function mask_pair = PairNearMask_Local(p,grains1,grains2,p_cut,thick)
+
+p1 = sum(p(:,:,grains1),3);
+p2 = sum(p(:,:,grains2),3);
+
+m1 = p1 > p_cut;
+m2 = p2 > p_cut;
+
+m1 = DilateMask_Local(m1,thick);
+m2 = DilateMask_Local(m2,thick);
+
+mask_pair = m1 & m2;
+
+end
+
+
+function mask = DilateMask_Local(mask,thick)
+
+if thick <= 0
+    return
+end
+
+ker  = ones(2*thick+1,2*thick+1);
+mask = conv2(double(mask),ker,'same') > 0;
+
+end
+
+
+function Plot_Field(GRID,A)
+
+pcolor(GRID.x,GRID.y,A)
+shading interp
+axis equal tight
+colorbar
+xlabel('x \mum')
+ylabel('y \mum')
+
+end
+
+
+function Check_Phase_Index(iph,Nphase,what)
+
+if iph < 1 || iph > Nphase
+    error('PF_Plot: phase index %d in "%s" is outside 1:%d.',iph,what,Nphase)
+end
 
 end

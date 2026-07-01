@@ -1,19 +1,53 @@
 %Clear and restart
-clear;figure(1);clf;addpath('bin');addpath('ThermoData');addpath('Thermo');addpath('Maps');addpath('Thermo\Solutions')
+clear;figure(2);clf;addpath('bin');addpath('ThermoData');addpath('Thermo');addpath('Maps');addpath('Thermo\Solutions')
 
-%LOAD MAP
-load Map2d.mat
+%LOAD MAP OR CHECKPOINT
+metadata_file = 'Metadata.xlsx';
+map_file      = fullfile('Maps','Map2d.mat');
+restart_file  = '';      
 
-%LOAD METADATA
-[PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata('Metadata.xlsx',GRID,MODEL,STATE,PARAM.eta,PARAM);
+if isempty(restart_file)
+    load(map_file)
+    NUM_RESTART = [];
+    it_offset = 0;
+else
+    load(restart_file)
+    NUM_RESTART = NUM;
+    [~,restart_base] = fileparts(restart_file);
+    it_offset = str2double(restart_base);
+    if isnan(it_offset)
+        it_offset = 0;
+    end
+end
 
-% %START TIME STEPS
-% PARAM.aniso_phase       = 1;
-% PARAM.aniso_nfold       = 4;
-% PARAM.aniso_q           = 0.2;
-% PARAM.theta_grain       = zeros(1,2);
+%LOAD CURRENT METADATA AFTER THE STATE IS KNOWN
+[PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata(metadata_file,GRID,MODEL,STATE,PARAM.eta,PARAM);
 
-for it = 1:1e5
+%If restarting, keep the accepted physical time but refresh metadata-controlled
+%thermodynamics, mobility, and timestep limits from metadata_file.
+if ~isempty(NUM_RESTART)
+    t_restart     = NUM_RESTART.t_phy;
+    dt_restart    = NUM_RESTART.dt_phy;
+    NUM.t_phy     = t_restart;
+    NUM.time      = t_restart;
+    NUM.dt_phy    = min(max(dt_restart,NUM.dt_min),NUM.dt_max);
+    NUM.dt_good_count = 0;
+end
+
+%DISPLAY ELEMENT
+disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  mean(STATE.E{4},'all')])
+
+for it_local = 1:1e4
+    it = it_offset + it_local;
+    if isfield(NUM,'t_tot') && NUM.t_phy >= NUM.t_tot
+        disp('Reached end of metadata P-T path time.')
+        break
+    end
+    if isfield(NUM,'t_tot') && NUM.t_phy + NUM.dt_phy > NUM.t_tot
+        NUM.dt_phy = max(NUM.t_tot - NUM.t_phy,NUM.dt_min);
+    end
+    NUM.istep = it;
+
     % SAVE CHECKPOINT
     if mod(it,200)==0
         save(num2str(it))
@@ -30,12 +64,16 @@ for it = 1:1e5
     [MODEL,PARAM]        =    Update_Model_PT(MODEL,PARAM,PHYS,Tcur,Pcur);
 
     % DAMPED ETA
-    PARAM.eta            =    Eta_Damping(STATE_OLD.p,PHYS.eta,NUM.int_damp*PHYS.eta);
+    p_eta                =    CollapsePForEta(STATE_OLD.p,MODEL.phase_index);
+    PARAM.eta            =    Eta_Damping_SmoothHalo(p_eta, PHYS.eta, NUM.int_damp*PHYS.eta, 4, 3e-3, 4, 3e-3, NUM.int_damp*PHYS.eta, 2, NUM.int_damp*PHYS.eta,1e-3);
+
+    %W scaling
+    PARAM                =    Calc_WScale(STATE_OLD,PARAM,MODEL,PHYS,NUM);
 
     % FIRST LOCAL EQUILIBRIUM
     t                    =    tic;
-    STATE_OLD            =    LE_Run_Mode_New(STATE_OLD,PARAM,MODEL);
-    STATE_OLD            =    Extend_AbsentPhaseC_Rim(STATE_OLD,PARAM);
+    STATE_OLD            =    LE_Run_Mode(STATE_OLD,PARAM,MODEL);
+    % STATE_OLD            =    Extend_AbsentPhaseC_Rim(STATE_OLD,PARAM);
     t_LE1                =    toc(t);
 
     % BUILD THE MASK FOR ACCH SOLVER
@@ -46,9 +84,8 @@ for it = 1:1e5
     PARAM                =    Compute_M_And_L(STATE_OLD,PARAM,MODEL,PHYS);
 
     % CALCULATE FACET
-    PARAM.aniso_scale_chemical = 0;   % physical capillary mode, do not scale chemical driving force
-    PARAM                =    Calc_Anisotropy_FacetAngular(STATE_OLD,PARAM,GRID,PHYS,MODEL);
-
+    % PARAM.aniso_scale_chemical = 0;   % physical capillary mode, do not scale chemical driving force
+    % PARAM                =    Calc_Anisotropy_FacetAngular(STATE_OLD,PARAM,GRID,PHYS,MODEL);
     % PARAM                =    Calc_Anisotropy_Facet(STATE_OLD,PARAM,GRID,PHYS);
 
     % Full AC + CH COUPLED PREDICTOR
@@ -57,49 +94,52 @@ for it = 1:1e5
 
     % SECOND LOCAL EQUILIBRIUM
     t                    =    tic;
-    STATE_LE0            =    LE_Run_Mode_New(STATE_RAW,PARAM,MODEL);
-    STATE_LE0            =    Extend_AbsentPhaseC_Rim(STATE_LE0,PARAM);
+    STATE_LE0            =    LE_Run_Mode(STATE_RAW,PARAM,MODEL);
     t_LE2                =    toc(t);
 
     % Fixed-p chemical corrector
     t                    =    tic;
-    STATE_TRIAL          =    PF_CH_LECorrector_FixedP_Band_CS_offdiagM(STATE_OLD,STATE_LE0,PARAM,MODEL,GRID,PHYS,NUM);
+    [STATE_TRIAL,DIAG_CHLE] = PF_CH_LECorrector_FixedP_Band_CS_offdiagM(STATE_OLD,STATE_LE0,PARAM,MODEL,GRID,PHYS,NUM);
     t_CHLE               =    toc(t);
+
+    % FINAL LOCAL EQUILIBRIUM AFTER FIXED-P CHEMICAL CORRECTOR
+    t                    =    tic;
+    STATE_TRIAL          =    LE_Run_Mode(STATE_TRIAL,PARAM,MODEL);
+    t_LE3                =    toc(t);
+    STATE_TRIAL.CHLE_diag =   DIAG_CHLE;
 
     % TIME STEP UPDATE
     dt_try               =    NUM.dt_phy;
     time_old             =    NUM.time;
-    [STATE,NUM]          =    Update_TimeStep_Soft(STATE,STATE_TRIAL,PARAM,MODEL,NUM);
+    [STATE,NUM,DIAG_TS]  =    Update_TimeStep_Soft(STATE,STATE_TRIAL,PARAM,MODEL,NUM);
     
     % PRINT TIME
     t_total              =    toc(t_step);
-    disp(['Total time:',num2str(t_total),' LE1:',num2str(t_LE1),' ACCH:',num2str(t_ACCH),' LE2:',num2str(t_LE2),' CH:',num2str(t_CHLE)])
+    disp(['IT: ',num2str(it),'. Total time:',num2str(t_total),' LE1:',num2str(t_LE1),' ACCH:',num2str(t_ACCH),' LE2:',num2str(t_LE2),' LE3:',num2str(t_LE3),' CH:',num2str(t_CHLE),' accept:',num2str(DIAG_TS.accept)])
 
 
     %Plotting
     TIME(it)             =    NUM.time;
     DTPHY(it)            =    NUM.dt_phy;
-    phase_ids            =    unique(MODEL.phase_index,'stable');
+    phase_ids            =    1:numel(MODEL.phs_name);
     PHASE(it,:)          =    zeros(1,numel(phase_ids));
     for iph = 1:numel(phase_ids)
         grains = find(MODEL.phase_index == phase_ids(iph));
         PHASE(it,iph) = mean(sum(STATE.p(:,:,grains),3),'all');
     end
 
-    if mod(it,2)==0
-        disp(PHASE(end,end))
-        PF_Plot([3,3,1],'E1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+    if mod(it,20)==0
+        disp(PHASE(end,:))
+        PF_Plot([3,3,1],'E3',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        % PF_Plot([3,3,6],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,7],'c11',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,8],'phi1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,9],'PhaseStack',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        subplot(339);plot(PHASE(:,1))
+        PF_Plot([3,3,5],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,6],'c11',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,7],'c21',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,8],'p3',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        subplot(339); plot(TIME,PHASE(:,:))
         drawnow
     end
 
 end
-

@@ -36,7 +36,7 @@ end
 % Defaults
 % ------------------------------------------------------------
 L_fac              = 1.0;
-dceq               = 0.5;
+dceq               = 0.2;
 M_min              = 1e-30;
 z_min              = 1e-30;
 M_L_floor_fac      = 0;
@@ -151,13 +151,11 @@ zeta = zeros(ny,nx);
 for ie = 1:Ne
 
     Mgrid = zeros(ny,nx);
-
     for iph = 1:Nphase
         Mgrid = Mgrid + M_phase_elem(iph,ie).*p_phase(:,:,iph);
     end
 
     mask = psum > eps;
-
     Mtmp = Mgrid;
     Mtmp(mask)  = Mgrid(mask)./psum(mask);
     Mtmp(~mask) = mean(M_phase_elem(:,ie));

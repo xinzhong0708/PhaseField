@@ -1,5 +1,5 @@
-function [STATE_CORR,DIAG] = PF_CH_LECorrector_FixedP_Band_CS(STATE_TIME,STATE_IT,PARAM,MODEL,GRID,PHYS,NUM)
-%PF_CH_LECORRECTOR_FIXEDP_BAND Reduced-band chemical corrector at fixed updated phi and p.
+function [STATE_CORR,DIAG] = PF_CH_LECorrector_FixedP_Band_CS_offdiagM(STATE_TIME,STATE_IT,PARAM,MODEL,GRID,PHYS,NUM)
+%PF_CH_LECORRECTOR_FIXEDP_BAND_CS_OFFDIAGM Reduced-band chemical corrector at fixed updated phi and p.
 %
 % This is a validation/acceleration version of PF_CH_LECorrector_FixedP.
 % It preserves exactly the same CH-LE correction equation, but solves
@@ -55,7 +55,7 @@ function [STATE_CORR,DIAG] = PF_CH_LECorrector_FixedP_Band_CS(STATE_TIME,STATE_I
 % Basic checks and sizes
 % ------------------------------------------------------------
 if nargin < 7
-    error('PF_CH_LECorrector_FixedP_Band_CS requires STATE_TIME, STATE_IT, PARAM, MODEL, GRID, PHYS and NUM.')
+    error('PF_CH_LECorrector_FixedP_Band_CS_offdiagM requires STATE_TIME, STATE_IT, PARAM, MODEL, GRID, PHYS and NUM.')
 end
 
 % Backward compatibility with the temporary signature:

@@ -1,23 +1,13 @@
-%% Make_Map_2D_Garnet_Seed.m
-% Generate Map2d.mat for either:
-%   map_mode = 'bands'
-%   map_mode = 'polygon'
+%% Create_Map2D_Polygon_Cleaned.m
+% Clean polygonal Map2d.mat generator.
 %
-% Full thermodynamic phase names are used.
-% No Data_*.mat files are loaded.
-%
-% Thermodynamic pars are built on the fly from:
-%
-%   init_thermo(...)
-%   tl_g0(T,P,...)
-%
-% Each grain has an orientation:
-%
-%   PARAM.theta_grain(ig)
-%
-% This is used later by:
-%
-%   Calc_AC_Anisotropy_FacetedStiffness
+% Main fixes relative to the previous polygon script:
+%   1) build the polygon map first, then compute the reference LE using the
+%      actual smoothed-p phase proportions, not the requested proportions;
+%   2) initialize polygonal phi as a smooth diffuse field instead of a
+%      one-hot grain mask;
+%   3) keep the central seed phase fraction self-consistent with its real
+%      rasterized area.
 
 clear; clf
 
@@ -30,59 +20,45 @@ addpath('..\Thermo\Solutions')
 %  User controls
 % ========================================================================
 
-map_mode = 'bands';     % 'bands' or 'polygon'
+map_mode = 'bands';
 
-% Pressure-temperature initial condition.  Keep this synchronized with the
-% PF metadata by default so map construction, Phase_Diagram.m, and
-% Run_2D_Scaled.m use the same thermodynamic state.
-metadata_file          = '..\Metadata.xlsx';
-sync_PT_from_metadata  = 1;
-T              = 500 + 273.15;       % K
+% Pressure-temperature initial condition
+T              = 900 + 273.15;       % K
 P              = 0.3e9;              % Pa
 
-if sync_PT_from_metadata == 1
-    [T,P] = Read_First_PT_From_Metadata(metadata_file,T,P);
-end
-
 % Elements and solution model
-Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
+Cname          = {'Fe' 'Mg' 'Ca' 'Al' 'Na' 'Si' 'O'};
 solmod         = 'solution_models_PFM';
 
-% Full thermodynamic phase names used in this PFM run
-phs_name = {'Orthopyroxene','Garnet','Kyanite','Quartz'};
+% Thermodynamic phases used in this PFM run.
+phs_name = {'Garnet','Clinopyroxene','Kyanite','Feldspar','Quartz'};
 
-% Requested phase proportions
-phase_prop = [0.3 0.04 0.2 0.1];
+% Requested phase proportions.  For polygon + fixed seed this is only used
+% for assigning non-seed grains.  The reference LE is recomputed later from
+% the realised smoothed-p phase proportions.
+phase_prop = [0.001 0.3 0.1 0.25 0.15];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions
 c_value = cell(1,numel(phs_name));
-c_value{1} = [0.05 0.15 0  0.4];          % Clinopyroxene
-c_value{2} = [0.45 0.45];                 % Garnet
-c_value{3} = 1.0;                         % Kyanite
-c_value{4} = 1.0;                         % Quartz
+c_value{1} = [0.45 0.45];                 % Garnet
+c_value{2} = [0.05 0.15 0 0.04 0.4];      % Clinopyroxene
+c_value{3} = [1.0];                       % Kyanite
+c_value{4} = [0.5];                       % Feldspar
+c_value{5} = [1.0];                       % Quartz
+
+% Grain orientation controls
+theta_grain_user = [];
+theta_rng_seed   = 1002;
 
 % Domain
-Lx = 100e-6;
-Ly = 100e-6;
-
-switch lower(map_mode)
-    case 'bands'
-        nx = 300;
-        ny = 4;
-    case 'polygon'
-        nx = 80;
-        ny = 80;
-    otherwise
-        error('Unknown map_mode: %s',map_mode)
-end
-
-% Band controls
-Nrepeat    = 1;
-band_order = repmat(1:numel(phs_name),1,Nrepeat);
+Lx = 25e-6;
+Ly = 25e-6;
+nx = 90;
+ny = 90;
 
 % Polygon controls
-grain_size   = 55.0e-6;   % mean equivalent-circle diameter, meter
+grain_size   = 9.50e-6;   % mean equivalent-circle diameter, meter
 Ngrain_user  = [];        % [] means estimate from grain_size
 rng_seed     = 6;
 periodic_map = 0;         % keep 0 unless the PF solver is periodic
@@ -95,28 +71,23 @@ island_clean_iter  = 6;
 quad_clean_iter    = 6;
 phase_assign_tries = 80;
 
-% Central Garnet seed controls, polygon mode only.
-% [] for seed_radius means choose the radius from the requested Garnet area.
+% Central seed controls
 use_center_seed  = 1;
 seed_phase_name  = 'Garnet';
-seed_radius      = [];
-seed_center_real = [];    % [] means domain center, or [x y] in meter
-single_seed_only = 1;     % do not assign Garnet to any non-seed grain
+seed_radius      = 2.30e-6;   % meter
+seed_center_real = [];
+single_seed_only = 1;
 
-% Phase separation controls, polygon mode only
+% Phase separation controls
 separate_same_phase = 1;
-phase_sep_weight    = 1000; % kept for save-file compatibility
+phase_sep_weight    = 1000;
 
-% Smooth polygonal phi to create a diffuse initial interface.
-smooth_phi            = 1;
-phi_smooth_sigma_grid = 2.0;
-phi_tail_cut          = 1e-10;
-
-% Grain orientation controls
-% [] means zero orientation for bands and random orientation for polygon.
-% To set manually, use a row vector with length Ngrain.
-theta_grain_user = [];
-theta_rng_seed   = 1002;
+% Smooth phi initialization.
+% This is important for polygonal grains.  The old one-hot polygon map can
+% give only a one-cell coexistence region and hard local E locking.
+smooth_phi             = 1;
+phi_smooth_sigma_grid  = 2.0;      % try 2-4 for an 8 dx interface
+phi_tail_cut           = 1e-10;    % remove only negligible Gaussian tails
 
 % Scaling / penalty
 PHYS        = struct();
@@ -127,49 +98,19 @@ PHYS.vref   = 2e-5;
 E_sc        = PHYS.E_sc;
 L_sc        = PHYS.L_sc;
 vref        = PHYS.vref;
-eta0        = 50000e10/E_sc;
-
-% Initial eta used to build E.  Match this to the first eta map in
-% Run_2D_Scaled; otherwise the first LE sees an artificial eta jump.
-sync_eta_controls_from_metadata = 1;
-init_eta_mode          = 'interface_damped'; % 'uniform' or 'interface_damped'
-init_eta_damp_factor   = 0.05;
-init_eta_q2            = 4;
-init_eta_p02           = 3e-3;
-init_eta_q3            = 4;
-init_eta_p03           = 3e-3;
-init_eta_nsmooth       = 1;
-init_eta_halo_cut      = 1e-3;
-
-% Reference LE controls.  Use the requested modal proportion and bulk eta so
-% bands and polygon maps start from the same thermodynamic c/mu reference.
-init_ref_phase_prop_mode = 'requested'; % 'requested' or 'realised_p'
-init_ref_eta_mode        = 'bulk';      % 'bulk' or 'harmonic_init'
-
-if sync_eta_controls_from_metadata == 1
-    [eta0,init_eta_damp_factor] = Read_Init_Eta_From_Metadata( ...
-        metadata_file,eta0,init_eta_damp_factor,E_sc);
-end
+eta0        = 4000e10/E_sc;
 
 %% ========================================================================
-%  Build thermodynamics on the fly
+%  Build thermodynamics only
 % ========================================================================
 
 pars_phase = Build_Pars_Phases(phs_name,Cname,solmod,T,P,E_sc,vref);
 Nphase     = numel(pars_phase);
 
 c_guess = cell(1,Nphase);
-
 for ip = 1:Nphase
     c_guess{ip} = num2cell(c_value{ip});
 end
-
-% Reference LE is computed after the actual map p and initial eta are known.
-% This avoids building an E field that is compatible with one eta and then
-% immediately running the PF code with another.
-e_guess = Calc_e(pars_phase,c_guess);
-E_guess = Calc_E_Tot(e_guess,reshape(phase_prop,1,1,Nphase));
-Ne      = numel(E_guess);
 
 %% ========================================================================
 %  Grid
@@ -191,206 +132,165 @@ GRID.Lx    = Lx/L_sc;
 GRID.Ly    = Ly/L_sc;
 
 %% ========================================================================
-%  Generate phase / grain map
+%  Generate polygonal grain map
 % ========================================================================
 
-switch lower(map_mode)
+grain_size_sc  = grain_size/L_sc;
+grain_area_tar = pi/4*grain_size_sc^2;
 
-    case 'bands'
+if isempty(Ngrain_user)
+    Ngrain = max(nnz(phase_prop > 0),round(GRID.Lx*GRID.Ly/grain_area_tar));
+else
+    Ngrain = Ngrain_user;
+end
 
-        Noccur        = accumarray(band_order(:),1,[Nphase,1]).';
-        band_fraction = phase_prop(band_order)./Noccur(band_order);
-        band_fraction = band_fraction/sum(band_fraction);
+rng(rng_seed,'twister')
+min_seed_dist = seed_min_dist_fac*grain_size_sc;
 
-        grain_phase = band_order(:);
-        Ngrain      = numel(grain_phase);
-        Np          = Ngrain;
+[grain_ID,seed_xy] = Generate_Polygonal_Grains_2D_Clean( ...
+    GRID,Ngrain,periodic_map,min_seed_dist,lloyd_iter, ...
+    min_grain_pixels,island_clean_iter,quad_clean_iter);
 
-        band_width = Local_Band_Widths(band_fraction,nx);
+fixed_grain = [];
+fixed_phase = [];
+seed_frac_raw = 0;
 
-        phi      = zeros(ny,nx,Ngrain);
-        phase_ID = zeros(ny,nx);
-        grain_ID = zeros(ny,nx);
-        seed_xy  = zeros(Ngrain,2);
+if use_center_seed == 1
 
-        ix1 = 1;
+    seed_phase = find(strcmp(phs_name,seed_phase_name),1,'first');
 
-        for ig = 1:Ngrain
+    if isempty(seed_phase)
+        error('seed_phase_name %s is not in phs_name.',seed_phase_name)
+    end
 
-            iph = grain_phase(ig);
-            ix2 = ix1 + band_width(ig) - 1;
+    [X,Y] = meshgrid(GRID.x,GRID.y);
 
-            phi(:,ix1:ix2,ig)   = 1;
-            phase_ID(:,ix1:ix2) = iph;
-            grain_ID(:,ix1:ix2) = ig;
+    if isempty(seed_center_real)
+        seed_center = [mean(GRID.x),mean(GRID.y)];
+    else
+        seed_center = seed_center_real/L_sc;
+    end
 
-            seed_xy(ig,1) = mean(x(ix1:ix2));
-            seed_xy(ig,2) = mean(y);
+    seed_radius_sc = seed_radius/L_sc;
+    seed_mask      = (X-seed_center(1)).^2 + ...
+                     (Y-seed_center(2)).^2 <= seed_radius_sc^2;
 
-            ix1 = ix2 + 1;
+    if ~any(seed_mask(:))
+        error('Central seed contains no grid points. Increase seed_radius.')
+    end
 
-        end
+    fixed_grain = size(seed_xy,1) + 1;
+    fixed_phase = seed_phase;
 
-        Check_Initial_Phi_Map(phi,grain_ID)
+    grain_ID(seed_mask) = fixed_grain;
+    seed_xy(fixed_grain,:) = seed_center;
 
-    case 'polygon'
+    seed_frac_raw = nnz(seed_mask)/numel(seed_mask);
 
-        grain_size_sc  = grain_size/L_sc;
-        grain_area_tar = pi/4*grain_size_sc^2;
+    fprintf('Central %s seed: radius %.4e m, raw area fraction %.8f\n', ...
+        seed_phase_name,seed_radius,seed_frac_raw)
+end
 
-        if isempty(Ngrain_user)
-            Ngrain = max(nnz(phase_prop > 0), ...
-                round(GRID.Lx*GRID.Ly/grain_area_tar));
-        else
-            Ngrain = Ngrain_user;
-        end
+% Clean after seed insertion and update fixed_grain id.
+[grain_ID,seed_xy,fixed_grain] = Clean_Grain_Map_Topology( ...
+    grain_ID,seed_xy,GRID,min_grain_pixels,island_clean_iter, ...
+    quad_clean_iter,fixed_grain);
 
-        rng(rng_seed,'twister')
-        min_seed_dist = seed_min_dist_fac*grain_size_sc;
+Ngrain = size(seed_xy,1);
+Np     = Ngrain;
 
-        [grain_ID,seed_xy] = Generate_Polygonal_Grains_2D_Clean( ...
-            GRID,Ngrain,periodic_map,min_seed_dist,lloyd_iter, ...
-            min_grain_pixels,island_clean_iter,quad_clean_iter);
+phase_prop_assign = phase_prop;
+forbidden_phase   = [];
+seed_frac_clean   = 0;
 
-        fixed_grain = [];
-        fixed_phase = [];
+if use_center_seed == 1 && single_seed_only == 1 && ~isempty(fixed_phase)
 
-        if use_center_seed == 1
+    seed_frac_clean = nnz(grain_ID == fixed_grain)/numel(grain_ID);
+    rest_phase      = setdiff(1:Nphase,fixed_phase);
+    rest_sum        = sum(phase_prop(rest_phase));
 
-            seed_phase = find(strcmp(phs_name,seed_phase_name),1,'first');
+    phase_prop_assign(:) = 0;
+    phase_prop_assign(fixed_phase) = seed_frac_clean;
 
-            if isempty(seed_phase)
-                error('seed_phase_name %s is not in phs_name.',seed_phase_name)
-            end
+    if rest_sum > 0
+        phase_prop_assign(rest_phase) = phase_prop(rest_phase)/rest_sum*(1-seed_frac_clean);
+    end
 
-            [X,Y] = meshgrid(GRID.x,GRID.y);
+    forbidden_phase = fixed_phase;
 
-            if isempty(seed_center_real)
-                seed_center = [mean(GRID.x),mean(GRID.y)];
-            else
-                seed_center = seed_center_real/L_sc;
-            end
+    fprintf('Only one %s seed is allowed. Non-seed grains cannot be %s.\n', ...
+        seed_phase_name,seed_phase_name)
+    fprintf('Central seed clean area fraction = %.8f\n',seed_frac_clean)
 
-            if isempty(seed_radius)
-                seed_radius_use = sqrt(phase_prop(seed_phase)*Lx*Ly/pi);
-            else
-                seed_radius_use = seed_radius;
-            end
+    if seed_frac_clean > 2*phase_prop(fixed_phase)
+        warning(['The realised seed fraction is much larger than the requested ', ...
+                 'phase_prop for this phase. Reference LE will use the realised ', ...
+                 'smoothed-p proportion instead of the requested value.'])
+    end
+end
 
-            seed_radius_sc = seed_radius_use/L_sc;
-            seed_mask      = (X-seed_center(1)).^2 + ...
-                             (Y-seed_center(2)).^2 <= seed_radius_sc^2;
+if separate_same_phase == 1
 
-            if ~any(seed_mask(:))
-                error('Central seed contains no grid points. Increase seed_radius.')
-            end
+    [grain_phase,~] = Assign_Grain_Phases_By_Area_Separated_Strict( ...
+        grain_ID,phase_prop_assign,fixed_grain,fixed_phase, ...
+        forbidden_phase,phase_assign_tries,rng_seed+1000);
 
-            fixed_grain = size(seed_xy,1) + 1;
-            fixed_phase = seed_phase;
+elseif use_center_seed == 1
 
-            grain_ID(seed_mask) = fixed_grain;
-            seed_xy(fixed_grain,:) = seed_center;
+    [grain_phase,~] = Assign_Grain_Phases_By_Area_FixedSeed( ...
+        grain_ID,phase_prop_assign,fixed_grain,fixed_phase,forbidden_phase);
 
-            fprintf('Central %s seed: radius %.4e m, raw area fraction %.8f\n', ...
-                seed_phase_name,seed_radius_use,nnz(seed_mask)/numel(seed_mask))
-        end
+else
 
-        [grain_ID,seed_xy,fixed_grain] = Clean_Grain_Map_Topology( ...
-            grain_ID,seed_xy,GRID,min_grain_pixels,island_clean_iter, ...
-            quad_clean_iter,fixed_grain);
-
-        Ngrain = size(seed_xy,1);
-        Np     = Ngrain;
-
-        phase_prop_assign = phase_prop;
-        forbidden_phase   = [];
-
-        if use_center_seed == 1 && single_seed_only == 1 && ~isempty(fixed_phase)
-
-            seed_frac  = nnz(grain_ID == fixed_grain)/numel(grain_ID);
-            rest_phase = setdiff(1:Nphase,fixed_phase);
-            rest_sum   = sum(phase_prop(rest_phase));
-
-            phase_prop_assign(:) = 0;
-            phase_prop_assign(fixed_phase) = seed_frac;
-
-            if rest_sum > 0
-                phase_prop_assign(rest_phase) = phase_prop(rest_phase)/rest_sum*(1-seed_frac);
-            end
-
-            forbidden_phase = fixed_phase;
-
-            fprintf('Only one %s seed is allowed. Non-seed grains cannot be %s.\n', ...
-                seed_phase_name,seed_phase_name)
-            fprintf('Central seed clean area fraction = %.8f\n',seed_frac)
-        end
-
-        if separate_same_phase == 1
-
-            [grain_phase,~] = Assign_Grain_Phases_By_Area_Separated_Strict( ...
-                grain_ID,phase_prop_assign,fixed_grain,fixed_phase, ...
-                forbidden_phase,phase_assign_tries,rng_seed+1000);
-
-        elseif use_center_seed == 1
-
-            [grain_phase,~] = Assign_Grain_Phases_By_Area_FixedSeed( ...
-                grain_ID,phase_prop_assign,fixed_grain,fixed_phase,forbidden_phase);
-
-        else
-
-            [grain_phase,~] = Assign_Grain_Phases_By_Area(grain_ID,phase_prop);
-
-        end
-
-        same_contact = Count_Same_Phase_Contacts(grain_ID,grain_phase);
-        quad_count   = Count_Quad_Junctions(grain_ID);
-
-        fprintf('Same-phase grain contacts after assignment = %d\n',same_contact)
-        fprintf('Remaining 2x2 quadruple junctions          = %d\n',quad_count)
-
-        phi_raw  = zeros(ny,nx,Ngrain);
-        phase_ID = zeros(ny,nx);
-
-        for ig = 1:Ngrain
-            mask              = grain_ID == ig;
-            phi_raw(:,:,ig)   = mask;
-            phase_ID(mask)    = grain_phase(ig);
-        end
-
-        Check_Initial_Phi_Map(phi_raw,grain_ID)
-
-        if smooth_phi == 1
-            phi = Smooth_Initial_Phi(phi_raw,phi_smooth_sigma_grid,phi_tail_cut);
-            Check_Smoothed_Phi_Map(phi)
-        else
-            phi = phi_raw;
-        end
-
-    otherwise
-
-        error('Unknown map_mode: %s',map_mode)
+    [grain_phase,~] = Assign_Grain_Phases_By_Area(grain_ID,phase_prop);
 
 end
 
-phase_prop_geom = Compute_Phase_Fraction_From_Map(phase_ID,Nphase);
+same_contact = Count_Same_Phase_Contacts(grain_ID,grain_phase);
+quad_count   = Count_Quad_Junctions(grain_ID);
 
+fprintf('Same-phase grain contacts after assignment = %d\n',same_contact)
+fprintf('Remaining 2x2 quadruple junctions          = %d\n',quad_count)
+
+if same_contact > 0
+    warning(['Some same-phase grain contacts remain. ', ...
+        'Increase Ngrain_user, reduce dominant phase fraction, or increase phase_assign_tries.'])
+end
+
+% Discrete grain and phase maps.
+phi_raw  = zeros(ny,nx,Ngrain);
+phase_ID = zeros(ny,nx);
+
+for ig = 1:Ngrain
+    mask              = grain_ID == ig;
+    phi_raw(:,:,ig)   = mask;
+    phase_ID(mask)    = grain_phase(ig);
+end
+
+Check_Initial_Phi_Map(phi_raw,grain_ID)
+
+% Smooth polygonal phi to make a resolved diffuse initial interface.
+if smooth_phi == 1
+    phi = Smooth_Initial_Phi(phi_raw,phi_smooth_sigma_grid,phi_tail_cut);
+else
+    phi = phi_raw;
+end
+
+Check_Smoothed_Phi_Map(phi)
+
+% ------------------------------------------------------------------------
 % Grain orientations
-theta_grain = zeros(1,Ngrain);
-
+% ------------------------------------------------------------------------
 if isempty(theta_grain_user)
 
-    if strcmpi(map_mode,'bands')
-        theta_grain(:) = 0;
-    else
-        rng_state = rng;
+    rng_state = rng;
 
-        if ~isempty(theta_rng_seed)
-            rng(theta_rng_seed,'twister')
-        end
-
-        theta_grain = pi*rand(1,Ngrain);
-        rng(rng_state)
+    if ~isempty(theta_rng_seed)
+        rng(theta_rng_seed,'twister')
     end
+
+    theta_grain = pi*rand(1,Ngrain);
+    rng(rng_state)
 
 else
 
@@ -402,21 +302,7 @@ else
 
 end
 
-fprintf('Initial %s map\n',map_mode)
-fprintf('Number of grains = %d\n',Ngrain)
-
-if strcmpi(map_mode,'bands')
-    fprintf('\nBand positions and orientations:\n')
-    for ig = 1:Ngrain
-        fprintf('grain %4d: phase = %-16s x = %.4e m, theta = %.6f rad\n', ...
-            ig,phs_name{grain_phase(ig)},seed_xy(ig,1)*L_sc,theta_grain(ig))
-    end
-else
-    grain_size_real = sqrt(4*(GRID.Lx*GRID.Ly/Ngrain)/pi)*L_sc;
-    fprintf('Requested grain diameter = %.4e m\n',grain_size)
-    fprintf('Realised mean equivalent diameter = %.4e m\n',grain_size_real)
-    fprintf('phi smoothing sigma = %.3f grids\n',phi_smooth_sigma_grid)
-end
+phase_prop_geom = Compute_Phase_Fraction_From_Map(phase_ID,Nphase);
 
 %% ========================================================================
 %  Grain-resolved MODEL
@@ -426,8 +312,8 @@ MODEL             = struct();
 MODEL.phs_name    = phs_name;
 MODEL.phase_index = grain_phase(:).';
 MODEL.pars        = pars_phase(MODEL.phase_index);
+MODEL.eta         = eta0;
 
-% Thermodynamic information for on-the-fly P-T update
 MODEL.Cname       = Cname;
 MODEL.solmod      = solmod;
 MODEL.T           = T;
@@ -448,48 +334,11 @@ pars = MODEL.pars;
 F    = MODEL;
 
 %% ========================================================================
-%  Plot map
+%  Compute actual smoothed-p phase proportions and reference LE
 % ========================================================================
 
-figure(3); clf
-imagesc(x*1e6,y*1e6,phase_ID)
-set(gca,'YDir','normal')
-axis image tight
-colorbar
-if strcmpi(map_mode,'bands')
-    title('Initial pseudo-1D phase bands')
-else
-    title('Initial polygonal phase map')
-    hold on
-    plot(seed_xy(:,1)*L_sc*1e6,seed_xy(:,2)*L_sc*1e6, ...
-        'k.','MarkerSize',5)
-    hold off
-end
-xlabel('x (\mum)')
-ylabel('y (\mum)')
-drawnow
-
-fprintf('\nInitial map mode: %s\n',map_mode)
-fprintf('Number of grains = %d\n',Ngrain)
-
-if strcmpi(map_mode,'bands')
-    grain_size_real = NaN;
-end
-
-fprintf('\nPhase             requested        realised area fraction      difference\n')
-for ip = 1:Nphase
-    fprintf('%-16s    %.8f         %.8f                 %+.3e\n', ...
-        phs_name{ip},phase_prop(ip),phase_prop_geom(ip), ...
-        phase_prop_geom(ip)-phase_prop(ip))
-end
-
-%% ========================================================================
-%  Construct locally penalty-consistent conserved composition field
-% ========================================================================
-
-p   = Calc_p(MODEL,phi);
-
-p_phase_ref   = Collapse_p_By_Phase(p,MODEL.phase_index,Nphase);
+p_tmp = Calc_p(MODEL,phi);
+p_phase_ref = Collapse_p_By_Phase(p_tmp,MODEL.phase_index,Nphase);
 phase_prop_ref = zeros(1,Nphase);
 
 for ip = 1:Nphase
@@ -499,58 +348,21 @@ end
 
 phase_prop_ref = phase_prop_ref/sum(phase_prop_ref);
 
-eta_bulk = eta0*ones(ny,nx);
-
-switch lower(init_eta_mode)
-    case 'uniform'
-        eta_init = eta_bulk;
-    case 'interface_damped'
-        eta_init = Eta_Damping_SmoothHalo( ...
-            p_phase_ref,eta_bulk,init_eta_damp_factor*eta_bulk, ...
-            init_eta_q2,init_eta_p02,init_eta_q3,init_eta_p03, ...
-            init_eta_damp_factor*eta_bulk,init_eta_nsmooth, ...
-            init_eta_damp_factor*eta_bulk,init_eta_halo_cut);
-    otherwise
-        error('Unknown init_eta_mode: %s',init_eta_mode)
-end
-
-switch lower(init_ref_phase_prop_mode)
-    case 'requested'
-        phase_prop_le_ref = phase_prop;
-    case 'realised_p'
-        phase_prop_le_ref = phase_prop_ref;
-    otherwise
-        error('Unknown init_ref_phase_prop_mode: %s',init_ref_phase_prop_mode)
-end
-
-phase_prop_le_ref = phase_prop_le_ref/sum(phase_prop_le_ref);
-
-switch lower(init_ref_eta_mode)
-    case 'bulk'
-        eta_ref = eta0;
-    case 'harmonic_init'
-        eta_ref = 1/mean(1./eta_init(:));
-    otherwise
-        error('Unknown init_ref_eta_mode: %s',init_ref_eta_mode)
-end
-
-eta = eta_bulk;
-
-p_ref    = reshape(phase_prop_le_ref,1,1,Nphase);
+p_ref    = reshape(phase_prop_ref,1,1,Nphase);
+e_guess  = Calc_e(pars_phase,c_guess);
 E_target = Calc_E_Tot(e_guess,p_ref);
+Ne       = numel(E_target);
 
-[c_ref,mu_ref] = LE_Calculator(pars_phase,p_ref,c_guess,E_target,eta_ref,[0.1,2000]);
+[c_ref,mu_ref] = LE_Calculator(pars_phase,p_ref,c_guess,E_target,eta0,[0.1,2000]);
 
 e_ref     = Calc_e(pars_phase,c_ref);
 E_mix_ref = Calc_E_Tot(e_ref,p_ref);
 
-E_offset_ref = cell(1,Ne);
-E_offset     = cell(1,Ne);
-omega_ref    = zeros(1,Nphase);
+E_offset  = cell(1,Ne);
+omega_ref = zeros(1,Nphase);
 
 for ie = 1:Ne
-    E_offset_ref{ie} = E_target{ie} - E_mix_ref{ie};
-    E_offset{ie}     = mu_ref{ie}./eta_init;
+    E_offset{ie} = E_target{ie} - E_mix_ref{ie};
 end
 
 for ip = 1:Nphase
@@ -560,65 +372,73 @@ for ip = 1:Nphase
     for ie = 1:Ne
         omega_ref(ip) = omega_ref(ip) - e_ref{ip}{ie}.*mu_ref{ie};
     end
-
 end
 
-c_phase = cell(1,Nphase);
+%% ========================================================================
+%  Plot map
+% ========================================================================
 
+figure(3); clf
+imagesc(x*1e6,y*1e6,phase_ID)
+set(gca,'YDir','normal')
+axis image tight
+colorbar
+title('Initial cleaned polygonal phase map')
+hold on
+plot(seed_xy(:,1)*L_sc*1e6,seed_xy(:,2)*L_sc*1e6, ...
+    'k.','MarkerSize',5)
+hold off
+xlabel('x (\mum)')
+ylabel('y (\mum)')
+drawnow
+
+fprintf('\nInitial map mode: polygon\n')
+fprintf('Number of grains = %d\n',Ngrain)
+grain_size_real = sqrt(4*(GRID.Lx*GRID.Ly/Ngrain)/pi)*L_sc;
+fprintf('Requested grain diameter = %.4e m\n',grain_size)
+fprintf('Realised mean equivalent diameter = %.4e m\n',grain_size_real)
+fprintf('phi smoothing sigma = %.3f grids\n',phi_smooth_sigma_grid)
+
+fprintf('\nPhase       requested        discrete area fraction      smoothed-p ref fraction\n')
 for ip = 1:Nphase
-    c_phase{ip} = cell(size(c_ref{ip}));
-
-    for ic = 1:numel(c_ref{ip})
-        c_phase{ip}{ic} = c_ref{ip}{ic}*ones(ny,nx);
-    end
+    fprintf('%-18s %.8f         %.8f                 %.8f\n', ...
+        phs_name{ip},phase_prop(ip),phase_prop_geom(ip),phase_prop_ref(ip))
 end
 
-c = Expand_c_By_Phase(c_phase,MODEL.phase_index);
-e = Calc_e(pars,c);
-E = Calc_E_Tot(e,p);
+fprintf('\nGrain orientations theta_grain:\n')
+disp(theta_grain)
 
-% Local penalty consistency for the actual initial eta map:
-% E - Emix = mu_ref / eta(x,y).
+%% ========================================================================
+%  Construct locally penalty-consistent conserved composition field
+% ========================================================================
+
+c   = Expand_c_By_Phase(c_ref,MODEL.phase_index,ny,nx);
+p   = Calc_p(MODEL,phi);
+e   = Calc_e(pars,c);
+E   = Calc_E_Tot(e,p);
+eta = eta0*ones(ny,nx);
+
+% Local penalty consistency: E - Emix = mu_ref / eta.
 for ie = 1:Ne
     E{ie} = E{ie} + E_offset{ie};
 end
 
 E_bulk_shift = zeros(1,Ne);
 
-mu_e = cell(1,Ne);
-
-for ie = 1:Ne
-    mu_e{ie} = mu_ref{ie}*ones(ny,nx);
-end
-
+mu_e = repmat({zeros(ny,nx)},1,Ne);
 chi  = repmat({zeros(ny,nx)},Ne,Ne);
-
-fprintf('Initial eta mode = %s, eta range = %.4e to %.4e, eta_ref = %.4e\n', ...
-    init_eta_mode,min(eta_init(:)),max(eta_init(:)),eta_ref)
-fprintf('Reference LE phase proportions (%s):',init_ref_phase_prop_mode)
-fprintf(' %.8f',phase_prop_le_ref)
-fprintf('\n')
 
 %% ========================================================================
 %  PARAM and STATE
 % ========================================================================
 
-PARAM            = struct();
-PARAM.Np         = Np;
-PARAM.Ne         = Ne;
-PARAM.eta        = eta_bulk;
-PARAM.eta_bulk   = eta_bulk;
-PARAM.eta_init   = eta_init;
-PARAM.use_WScale = 0;
-PARAM.T          = T;
-PARAM.P          = P;
-PARAM.init_eta_mode        = init_eta_mode;
-PARAM.init_eta_damp_factor = init_eta_damp_factor;
-PARAM.init_eta_synced_E    = 1;
-PARAM.init_ref_phase_prop_mode = init_ref_phase_prop_mode;
-PARAM.init_ref_eta_mode        = init_ref_eta_mode;
-
-% Grain orientations for anisotropic faceting
+PARAM             = struct();
+PARAM.Np          = Np;
+PARAM.Ne          = Ne;
+PARAM.eta         = eta;
+PARAM.use_WScale  = 0;
+PARAM.T           = T;
+PARAM.P           = P;
 PARAM.theta_grain = theta_grain;
 
 STATE          = struct();
@@ -672,14 +492,7 @@ end
 STATE_INI = STATE;
 
 PARAM.LE_mode = 'LE';
-PARAM_LE      = PARAM;
-PARAM_LE.eta  = eta_init;
-
-if exist('LE_Run_Mode','file') == 2
-    STATE = LE_Run_Mode(STATE,PARAM_LE,MODEL);
-else
-    STATE = LE_Run_Mode_New(STATE,PARAM_LE,MODEL);
-end
+STATE         = LE_Run_Mode(STATE,PARAM,MODEL);
 
 p_phase        = Collapse_p_By_Phase(STATE.p,MODEL.phase_index,Nphase);
 phase_prop_map = zeros(1,Nphase);
@@ -720,18 +533,23 @@ for ig = 1:Ngrain
     end
 end
 
+E_mean        = zeros(Ne,1);
+E_target_vec  = zeros(Ne,1);
+
+for ie = 1:Ne
+    E_mean(ie)       = mean(STATE.E{ie}(:));
+    E_target_vec(ie) = E_target{ie};
+end
+
 mu_jump = zeros(1,Ne);
-E_mu_consistency = zeros(1,Ne);
-E_mix_check = Calc_E_Tot(STATE.e,STATE.p);
 
 for ie = 1:Ne
     mu_jump(ie) = max(STATE.mu_e{ie}(:)) - min(STATE.mu_e{ie}(:));
-    E_mu_consistency(ie) = max(abs( ...
-        eta_init(:).*(STATE.E{ie}(:)-E_mix_check{ie}(:)) - STATE.mu_e{ie}(:)));
 end
 
 fprintf('\nmax|c after first LE - c before LE| = %.8e\n',dc_max)
-fprintf('max|eta_init*(E-Emix)-mu_e|        = %.8e\n',max(E_mu_consistency))
+fprintf('max|mean(E map) - E target|         = %.8e\n', ...
+    max(abs(E_mean-E_target_vec)))
 fprintf('initial mu_e jump after LE:\n')
 disp(mu_jump)
 
@@ -750,24 +568,16 @@ phi  = STATE.phi;
 
 save('Map2d.mat', ...
     'PHYS','GRID','MODEL','PARAM','STATE', ...
-    'E_sc','L_sc','vref','eta','eta_bulk','eta_init', ...
-    'pars','Np','Ne','Nphase','Ngrain', ...
+    'E_sc','L_sc','vref','eta','pars','Np','Ne','Nphase','Ngrain', ...
     'T','P','Cname','solmod', ...
-    'phs_name','phase_prop','phase_prop_geom','phase_prop_ref', ...
-    'phase_prop_le_ref','phase_prop_map', ...
+    'phs_name','phase_prop','phase_prop_geom','phase_prop_ref','phase_prop_map', ...
     'map_mode','grain_ID','phase_ID','grain_phase','seed_xy','theta_grain', ...
     'theta_grain_user','theta_rng_seed', ...
     'grain_size','grain_size_real','Ngrain_user','rng_seed','periodic_map', ...
-    'seed_min_dist_fac','lloyd_iter','min_grain_pixels','island_clean_iter', ...
-    'quad_clean_iter','phase_assign_tries', ...
-    'use_center_seed','seed_phase_name','seed_radius','seed_center_real', ...
-    'single_seed_only','separate_same_phase','phase_sep_weight', ...
-    'smooth_phi','phi_smooth_sigma_grid','phi_tail_cut', ...
-    'init_ref_phase_prop_mode','init_ref_eta_mode', ...
-    'init_eta_mode','init_eta_damp_factor','init_eta_q2','init_eta_p02', ...
-    'init_eta_q3','init_eta_p03','init_eta_nsmooth','init_eta_halo_cut', ...
-    'eta_ref','E_target','E_offset','E_offset_ref','E_bulk_shift', ...
-    'c_ref','mu_ref','omega_ref', ...
+    'seed_min_dist_fac','lloyd_iter','min_grain_pixels','island_clean_iter','quad_clean_iter','phase_assign_tries', ...
+    'use_center_seed','seed_phase_name','seed_radius','seed_center_real','single_seed_only', ...
+    'separate_same_phase','phase_sep_weight','smooth_phi','phi_smooth_sigma_grid','phi_tail_cut', ...
+    'E_target','E_offset','E_bulk_shift','c_ref','mu_ref','omega_ref', ...
     'c','e','E','p','mu_e','chi','phi')
 
 fprintf('\nSaved Map2d.mat\n')
@@ -777,345 +587,8 @@ fprintf('Saved PARAM.theta_grain:\n')
 disp(PARAM.theta_grain)
 
 %% ========================================================================
-%  Local helper functions
+%  Extra local helpers for smoothed polygon initialization
 % ========================================================================
-
-function [T,P] = Read_First_PT_From_Metadata(metadata_file,T_default,P_default)
-
-T = T_default;
-P = P_default;
-
-if exist(metadata_file,'file') ~= 2
-    if exist('Metadata.xlsx','file') == 2
-        metadata_file = 'Metadata.xlsx';
-    elseif exist('MetaData.xlsx','file') == 2
-        metadata_file = 'MetaData.xlsx';
-    end
-end
-
-if exist(metadata_file,'file') ~= 2
-    warning('Metadata file "%s" was not found. Using map P-T controls.',metadata_file)
-    return
-end
-
-try
-    Cpt = readcell(metadata_file,'Sheet','PTt_Path');
-catch ME
-    warning('Could not read PTt_Path from metadata file "%s": %s. Using map P-T controls.', ...
-        metadata_file,ME.message)
-    return
-end
-
-header_row = [];
-
-for i = 1:size(Cpt,1)
-
-    row_txt = cell(1,size(Cpt,2));
-
-    for j = 1:size(Cpt,2)
-        row_txt{j} = strtrim(Cell_String_Local(Cpt{i,j}));
-    end
-
-    if any(strcmpi(row_txt,'P (Pa)')) && ...
-       any(strcmpi(row_txt,'T (K)'))  && ...
-       any(strcmpi(row_txt,'t (s)'))
-        header_row = i;
-        break
-    end
-end
-
-if isempty(header_row)
-    warning('PTt_Path header row not found in "%s". Using map P-T controls.',metadata_file)
-    return
-end
-
-colP = [];
-colT = [];
-colt = [];
-
-for j = 1:size(Cpt,2)
-
-    txt = strtrim(Cell_String_Local(Cpt{header_row,j}));
-
-    if strcmpi(txt,'P (Pa)')
-        colP = j;
-    elseif strcmpi(txt,'T (K)')
-        colT = j;
-    elseif strcmpi(txt,'t (s)')
-        colt = j;
-    end
-end
-
-pt_rows = [];
-
-for i = header_row+1:size(Cpt,1)
-
-    if Is_Empty_Cell_Local(Cpt{i,colP}) || ...
-       Is_Empty_Cell_Local(Cpt{i,colT}) || ...
-       Is_Empty_Cell_Local(Cpt{i,colt})
-        continue
-    end
-
-    pt_rows(end+1,:) = [ ...
-        Cell_Number_Local(Cpt{i,colt}), ...
-        Cell_Number_Local(Cpt{i,colT}), ...
-        Cell_Number_Local(Cpt{i,colP})]; %#ok<AGROW>
-end
-
-if isempty(pt_rows)
-    warning('PTt_Path contains no valid rows in "%s". Using map P-T controls.',metadata_file)
-    return
-end
-
-[~,ord] = sort(pt_rows(:,1));
-pt_rows = pt_rows(ord,:);
-
-T = pt_rows(1,2);
-P = pt_rows(1,3);
-
-fprintf('Map P-T from %s: T = %.12g K, P = %.12g Pa\n',metadata_file,T,P)
-
-end
-
-
-function [eta0,init_eta_damp_factor] = Read_Init_Eta_From_Metadata( ...
-    metadata_file,eta0,init_eta_damp_factor,E_sc)
-
-if exist(metadata_file,'file') ~= 2
-    if exist('Metadata.xlsx','file') == 2
-        metadata_file = 'Metadata.xlsx';
-    elseif exist('MetaData.xlsx','file') == 2
-        metadata_file = 'MetaData.xlsx';
-    end
-end
-
-if exist(metadata_file,'file') ~= 2
-    warning('Metadata file "%s" was not found. Using map eta controls.',metadata_file)
-    return
-end
-
-try
-    Cmain = readcell(metadata_file,'Sheet','Main');
-catch ME
-    warning('Could not read metadata file "%s": %s. Using map eta controls.', ...
-        metadata_file,ME.message)
-    return
-end
-
-eta_SI = Get_Metadata_Value_Any(Cmain,{'Penalty eta','eta'},[]);
-
-if ~isempty(eta_SI) && isnumeric(eta_SI)
-    eta0 = eta_SI/E_sc;
-end
-
-init_eta_damp_factor = Get_Metadata_Value_Any( ...
-    Cmain,{'interface damping factor','Interface damping factor'}, ...
-    init_eta_damp_factor);
-
-if ~isnumeric(init_eta_damp_factor) || ~isfinite(init_eta_damp_factor)
-    error('Metadata interface damping factor must be a finite number.')
-end
-
-init_eta_damp_factor = min(max(init_eta_damp_factor,eps),1);
-
-end
-
-
-function val = Get_Metadata_Value_Any(C,keys,default)
-
-val = default;
-
-for ik = 1:numel(keys)
-
-    key = strtrim(keys{ik});
-
-    for i = 1:size(C,1)
-
-        key_i = strtrim(Cell_String_Local(C{i,1}));
-
-        if strcmpi(key_i,key)
-
-            if size(C,2) < 2 || Is_Empty_Cell_Local(C{i,2})
-                return
-            end
-
-            raw = C{i,2};
-
-            if isnumeric(raw)
-                val = raw;
-            elseif ischar(raw) || isstring(raw)
-
-                tmp = str2double(raw);
-
-                if isnan(tmp)
-                    val = char(raw);
-                else
-                    val = tmp;
-                end
-
-            else
-                val = raw;
-            end
-
-            return
-        end
-    end
-end
-
-end
-
-
-function val = Cell_Number_Local(x)
-
-if isnumeric(x)
-    val = x;
-elseif ischar(x) || isstring(x)
-    val = str2double(x);
-else
-    val = NaN;
-end
-
-if ~isfinite(val)
-    error('Metadata PTt_Path contains a nonnumeric P-T-time value.')
-end
-
-end
-
-
-function s = Cell_String_Local(x)
-
-if ismissing(x)
-    s = '';
-elseif ischar(x)
-    s = x;
-elseif isstring(x)
-    s = char(x);
-elseif isnumeric(x)
-    s = num2str(x);
-else
-    s = '';
-end
-
-end
-
-
-function tf = Is_Empty_Cell_Local(x)
-
-if isempty(x)
-    tf = true;
-elseif ismissing(x)
-    tf = true;
-elseif ischar(x) || isstring(x)
-    tf = strlength(string(x)) == 0;
-else
-    tf = false;
-end
-
-end
-
-
-function pars_phase = Build_Pars_Phases(phs_name,Cname,solmod,T,P,E_sc,vref)
-
-%BUILD_PARS_PHASES Build pars for present phases at given T and P.
-%
-% Full-name-only version.
-%
-% Recomputes:
-%   td = init_thermo(...)
-%   g0 = tl_g0(T,P,td)
-%   n  = td.n_em(:,1:end-1)
-
-Nphase     = numel(phs_name);
-pars_phase = cell(1,Nphase);
-
-for ip = 1:Nphase
-
-    % ------------------------------------------------------------
-    % Phase
-    % ------------------------------------------------------------
-    phase_name = phs_name(ip);
-
-    td = init_thermo(phase_name,Cname,solmod);
-    g0 = cell2mat(tl_g0(T,P,td));
-    n  = td.n_em(:,1:end-1);
-
-    % ------------------------------------------------------------
-    % Thermodynamic values
-    % ------------------------------------------------------------
-    td.n_em(:,1:end-1) = n;
-
-    pars            = td;
-    pars.n          = n;
-    pars.P          = P;
-    pars.T          = T;
-    pars.g0         = g0;
-    pars.E_sc       = E_sc;
-    pars.vref       = vref;
-    pars.phase_name = phase_name;
-
-    pars_phase{ip}  = pars;
-
-end
-
-end
-
-
-function band_width = Local_Band_Widths(band_fraction,nx)
-
-%LOCAL_BAND_WIDTHS Integer band widths with no missing positive band.
-
-band_fraction = band_fraction(:).';
-band_fraction = band_fraction/sum(band_fraction);
-
-Nband = numel(band_fraction);
-raw   = nx*band_fraction;
-
-band_width = floor(raw);
-band_width(raw > 0 & band_width < 1) = 1;
-
-while sum(band_width) < nx
-
-    deficit = nx - sum(band_width);
-    res     = raw - band_width;
-    [~,ord] = sort(res,'descend');
-
-    for k = 1:min(deficit,Nband)
-        band_width(ord(k)) = band_width(ord(k)) + 1;
-    end
-
-end
-
-while sum(band_width) > nx
-
-    excess = sum(band_width) - nx;
-    res    = raw - band_width;
-    [~,ord] = sort(res,'ascend');
-
-    changed = 0;
-
-    for k = 1:Nband
-
-        ig = ord(k);
-
-        if band_width(ig) > 1
-            band_width(ig) = band_width(ig) - 1;
-            changed = changed + 1;
-        end
-
-        if changed >= excess
-            break
-        end
-
-    end
-
-    if changed == 0
-        error('Local_Band_Widths: cannot assign positive width to all bands.')
-    end
-
-end
-
-end
-
 
 function phi = Smooth_Initial_Phi(phi_raw,sigma_grid,tail_cut)
 
@@ -1134,7 +607,8 @@ rad = max(1,ceil(3*sigma_grid));
 K = exp(-(xk.^2 + yk.^2)/(2*sigma_grid^2));
 K = K/sum(K(:));
 
-% Boundary-normalized convolution avoids artificial phi loss at non-periodic edges.
+% Boundary-normalized convolution.  This avoids artificial phi loss near
+% non-periodic domain edges without using padarray/Image Processing Toolbox.
 W = conv2(ones(ny,nx),K,'same');
 W = max(W,eps);
 
@@ -1164,7 +638,6 @@ phi = phi./max(S,eps);
 
 end
 
-
 function Check_Smoothed_Phi_Map(phi)
 
 if any(~isfinite(phi(:)))
@@ -1180,6 +653,50 @@ err = max(abs(S(:)-1));
 
 if err > 1e-10
     error('Check_Smoothed_Phi_Map: sum(phi,3) is not one. max error %.3e',err)
+end
+
+end
+
+
+%% ========================================================================
+%  Local helper functions
+% ========================================================================
+
+function pars_phase = Build_Pars_Phases(phs_name,Cname,solmod,T,P,E_sc,vref)
+
+%BUILD_PARS_PHASES Build pars for present phases at given T and P.
+%
+% Full-name-only version. No Data_*.mat files are loaded.
+%
+% Recomputes:
+%   td = init_thermo(...)
+%   g0 = tl_g0(T,P,td)
+%   n  = td.n_em(:,1:end-1)
+
+Nphase     = numel(phs_name);
+pars_phase = cell(1,Nphase);
+
+for ip = 1:Nphase
+
+    phase_name = phs_name(ip);
+
+    td = init_thermo(phase_name,Cname,solmod);
+    g0 = cell2mat(tl_g0(T,P,td));
+    n  = td.n_em(:,1:end-1);
+
+    td.n_em(:,1:end-1) = n;
+
+    pars            = td;
+    pars.n          = n;
+    pars.P          = P;
+    pars.T          = T;
+    pars.g0         = g0;
+    pars.E_sc       = E_sc;
+    pars.vref       = vref;
+    pars.phase_name = phase_name;
+
+    pars_phase{ip}  = pars;
+
 end
 
 end
@@ -1441,6 +958,7 @@ for iy = 1:ny-1
             continue
         end
 
+        % Break a 4-grain grid vertex into two 3-grain vertices.
         if ~ismember(grain_ID(iy+1,ix+1),fixed_grain)
             grain_ID(iy+1,ix+1) = grain_ID(iy,ix+1);
         elseif ~ismember(grain_ID(iy,ix),fixed_grain)
@@ -1725,9 +1243,11 @@ for itry = 1:ntry
             candidates = allowed_phase;
         end
 
+        % Strictly remove phases already present in assigned neighbours.
         bad_phase  = unique(grain_phase(neigh));
         candidates = setdiff(candidates,bad_phase);
 
+        % If impossible locally, fall back to allowed phases and penalize.
         if isempty(candidates)
             candidates = allowed_phase;
         end
@@ -1884,6 +1404,7 @@ end
 
 
 function adj = Build_Grain_Adjacency(grain_ID)
+%BUILD_GRAIN_ADJACENCY Four-neighbour grain adjacency graph.
 
 Ngrain = max(grain_ID(:));
 adj    = false(Ngrain,Ngrain);
@@ -1909,6 +1430,7 @@ end
 
 
 function n_same = Count_Same_Phase_Contacts(grain_ID,grain_phase)
+%COUNT_SAME_PHASE_CONTACTS Count unique neighbouring same-phase grain pairs.
 
 adj = Build_Grain_Adjacency(grain_ID);
 [i,j] = find(triu(adj,1));
@@ -1936,17 +1458,33 @@ end
 end
 
 
-function c = Expand_c_By_Phase(c_phase,phase_index)
+function c = Expand_c_By_Phase(c_phase,phase_index,ny,nx)
 
 Ngrain = numel(phase_index);
 c      = cell(1,Ngrain);
 
 for ig = 1:Ngrain
-    c{ig} = c_phase{phase_index(ig)};
-end
+
+    iph   = phase_index(ig);
+    c{ig} = cell(size(c_phase{iph}));
+
+    for ic = 1:numel(c_phase{iph})
+
+        ci = c_phase{iph}{ic};
+
+        if isscalar(ci)
+            c{ig}{ic} = ci*ones(ny,nx);
+        elseif isequal(size(ci),[ny nx])
+            c{ig}{ic} = ci;
+        else
+            error('Expand_c_By_Phase: c_phase{%d}{%d} has incompatible size.',iph,ic)
+        end
+
+    end
 
 end
 
+end
 
 function p_phase = Collapse_p_By_Phase(p_grain,phase_index,Nphase)
 

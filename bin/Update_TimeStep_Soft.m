@@ -42,7 +42,6 @@ err_mu = dmu_rob / max(NUM.dmu_target,eps);
 err_primary = max(err_E,err_p);
 err         = max([err_primary,err_mu]);
 
-%Reject condition
 hard_bad_mu = dmu_hard > 50*NUM.dmu_target && dmu_rob > 2*NUM.dmu_target;
 bad_number  = any(~isfinite(Dmu(:))) || ~isfinite(dE) || ~isfinite(dp);
 

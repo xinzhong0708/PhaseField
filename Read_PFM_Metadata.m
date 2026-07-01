@@ -142,8 +142,13 @@ eta_SI = Get_Value_Any(Cmain,{'Penalty eta','eta'},[]);
 
 if isempty(eta_SI)
 
-    % eta from Map2d.mat is normally already scaled.
-    PHYS.eta = eta;
+    % eta from Map2d.mat is normally already scaled.  Prefer an explicit
+    % bulk eta if the map also stores an initialization-specific eta map.
+    if isfield(PARAM,'eta_bulk') && ~isempty(PARAM.eta_bulk)
+        PHYS.eta = PARAM.eta_bulk;
+    else
+        PHYS.eta = eta;
+    end
 
 else
 
@@ -256,6 +261,13 @@ PARAM.M_L_p_cut          = Get_Value_Any(Cmain,{'M L p cutoff'},1e-8);
 
 PARAM.dceq          = PHYS.dceq;
 
+PARAM.update_PT_every = Get_Value_Any(Cmain,{'Update PT every','PT update every'},1);
+
+PARAM.update_PT_every = round(PARAM.update_PT_every);
+if PARAM.update_PT_every < 1
+    PARAM.update_PT_every = 1;
+end
+
 % Temporary initial values. Compute_M_And_L updates these during the run.
 PARAM.L             = zeros(GRID.ny,GRID.nx);
 PARAM.Lm            = zeros(GRID.ny,GRID.nx);
@@ -283,12 +295,19 @@ PHYS.M_phs          = zeros(Nphase,Ne);
 
 PARAM.aniso_mode    = cell(1,Nphase);
 PARAM.aniso_phase   = [];
+PARAM.WScale_phase_factor = ones(1,Nphase);
 facet_all           = struct([]);
 
 for ip = 1:Nphase
 
     phase_name = MODEL.phs_name{ip};
     Cph        = readcell(xlsx_file,'Sheet',phase_name);
+    % Interface excess-energy damping factor.
+    % 1 = original excess energy
+    % 0 = excess energy fully removed at the strongest interface/tail limit
+    wfac       = Get_Value_Any(Cph,{'Interface damp W factor'},1);
+    wfac       = min(max(wfac,0),1);
+    PARAM.WScale_phase_factor(ip) = wfac;
 
     % Mobility in Excel is the raw mobility used by the PF solver.
     % This mobility is the coefficient in:

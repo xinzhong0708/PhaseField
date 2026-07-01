@@ -1,18 +1,14 @@
 function STATE = Extend_AbsentPhaseC_Rim(STATE,PARAM)
-%EXTEND_ABSENTPHASEC_RIM Extend phase c a few grids outside each grain.
+%EXTEND_ABSENTPHASEC_RIM Fast nearest-neighbour extension of phase c.
 %
-% This function is meant to be called after LE_Run_Mode_New.
-% It does not solve local equilibrium. It only fills the absent-phase rim
-% from neighbouring present-phase c so that kappa(c) does not see a sharp
-% artificial jump at the phase boundary.
-%
-% The present-phase region is kept fixed. Only the outer rim is modified.
-% STATE.c_ext is also written and can be used by kappa(c) solvers.
+% Present-phase region is kept fixed.
+% Only absent rim / optional bad points are modified.
+% STATE.c_ext is written for kappa(c) solvers.
 
 [ny,nx,Ng] = size(STATE.p);
 
 rim_width   = 3;
-rim_smooth  = 1;
+rim_smooth  = 0;
 p_core      = 1e-5;
 fix_bad_all = 0;
 
@@ -32,162 +28,141 @@ end
 rim_width  = max(0,round(rim_width));
 rim_smooth = max(0,round(rim_smooth));
 
+if exist('bwdist','file') ~= 2
+    error('Extend_AbsentPhaseC_Rim: bwdist is required for this fast version.')
+end
+
 c_ext = STATE.c;
+ker   = ones(2*rim_width+1,2*rim_width+1);
 
 for ig = 1:Ng
 
-    p_ig    = STATE.p(:,:,ig);
-    present = p_ig > p_core;
+    present = STATE.p(:,:,ig) > p_core;
 
     if ~any(present(:))
         continue
     end
 
-    band = Dilate_Mask_Local(present,rim_width);
-    rim  = band & ~present;
+    if rim_width > 0
+        band = conv2(double(present),ker,'same') > 0;
+    else
+        band = present;
+    end
+
+    rim = band & ~present;
 
     if ~any(rim(:)) && fix_bad_all == 0
         continue
     end
 
-    for ic = 1:numel(STATE.c{ig})
+    % ------------------------------------------------------------
+    % Stack all composition variables
+    % ------------------------------------------------------------
+    Nc = numel(STATE.c{ig});
+    C0 = cat(3,STATE.c{ig}{:});
+    C  = C0;
 
-        A0 = STATE.c{ig}{ic};
-        A  = A0;
+    % Valid source pixels must be inside the phase and finite for all c
+    valid = present & all(isfinite(C0),3);
 
-        good = isfinite(A);
-        valid = present & good;
+    if ~any(valid(:))
+        continue
+    end
 
-        if ~any(valid(:))
-            continue
-        end
+    % ------------------------------------------------------------
+    % Nearest present-phase source for all target points
+    % ------------------------------------------------------------
+    [~,idx] = bwdist(valid);
 
-        %Fill the outer rim from neighbouring present/filled values.
-        todo = rim & ~valid;
+    target = rim;
 
-        if fix_bad_all == 1
-            todo = todo | ~good;
-        end
+    if fix_bad_all == 1
+        target = target | any(~isfinite(C0),3);
+    end
 
-        for it = 1:(rim_width+2)
+    ids = find(target);
 
-            [sumv,cnt] = Neighbour_Sum_Valid(A,valid);
-            take = todo & cnt > 0;
+    if ~isempty(ids)
 
-            if ~any(take(:))
-                break
-            end
+        ids = double(ids(:));
+        src = double(idx(ids));
 
-            A(take) = sumv(take)./cnt(take);
-            valid(take) = true;
-            todo(take)  = false;
+        Nxy  = ny*nx;
+        offs = double((0:Nc-1)*Nxy);
 
-            if ~any(todo(:))
-                break
-            end
-        end
+        linT = ids + offs;
+        linS = src + offs;
 
-        %If requested, repair isolated bad points using the present-phase mean.
-        if fix_bad_all == 1 && any(todo(:))
-            A(todo) = mean(A(valid),'all');
-            valid(todo) = true;
-        end
-
-        %Optional smoothing only in the rim. The grain interior is fixed.
-        for it = 1:rim_smooth
-            Avg = Neighbour_Avg_Domain(A,band);
-            A(rim)     = Avg(rim);
-            A(present) = A0(present);
-        end
-
-        c_ext{ig}{ic} = A;
+        C(linT) = C(linS);
 
     end
+
+    % ------------------------------------------------------------
+    % Optional smoothing only in the rim
+    % ------------------------------------------------------------
+    if rim_smooth > 0 && any(rim(:))
+
+        for it = 1:rim_smooth
+            C = Smooth_Rim_Local(C,C0,present,rim,band);
+        end
+
+    end
+
+    % ------------------------------------------------------------
+    % Assign back
+    % ------------------------------------------------------------
+    for ic = 1:Nc
+        c_ext{ig}{ic} = C(:,:,ic);
+    end
+
 end
 
-%Use the rim-extended c as both auxiliary output and safe phase-c memory.
-%Only rim/optional bad nodes are modified; present-phase c is unchanged.
 STATE.c     = c_ext;
 STATE.c_ext = c_ext;
 
 end
 
 
-function mask = Dilate_Mask_Local(core,thickness)
+function C = Smooth_Rim_Local(C,C0,present,rim,band)
 
-if thickness <= 0
-    mask = logical(core);
-    return
-end
-
-ker  = ones(2*thickness+1,2*thickness+1);
-mask = conv2(double(core),ker,'same') > 0;
-
-end
-
-
-function [sumv,cnt] = Neighbour_Sum_Valid(A,valid)
-
-[ny,nx] = size(A);
+[ny,nx,Nc] = size(C);
 
 if nx == 1
-    AL = A; AR = A;
-    VL = valid; VR = valid;
+    CL = C; CR = C;
+    BL = band; BR = band;
 else
-    AL = A(:,[2,1:nx-1]);
-    AR = A(:,[2:nx,nx-1]);
-    VL = valid(:,[2,1:nx-1]);
-    VR = valid(:,[2:nx,nx-1]);
+    CL = C(:,[2,1:nx-1],:);
+    CR = C(:,[2:nx,nx-1],:);
+    BL = band(:,[2,1:nx-1]);
+    BR = band(:,[2:nx,nx-1]);
 end
 
 if ny == 1
-    AU = A; AD = A;
-    VU = valid; VD = valid;
+    CU = C; CD = C;
+    BU = band; BD = band;
 else
-    AU = A([2,1:ny-1],:);
-    AD = A([2:ny,ny-1],:);
-    VU = valid([2,1:ny-1],:);
-    VD = valid([2:ny,ny-1],:);
+    CU = C([2,1:ny-1],:,:);
+    CD = C([2:ny,ny-1],:,:);
+    BU = band([2,1:ny-1],:);
+    BD = band([2:ny,ny-1],:);
 end
 
-sumv = zeros(ny,nx);
-cnt  = zeros(ny,nx);
+BL3 = repmat(BL,1,1,Nc);
+BR3 = repmat(BR,1,1,Nc);
+BU3 = repmat(BU,1,1,Nc);
+BD3 = repmat(BD,1,1,Nc);
 
-sumv = sumv + AL.*VL; cnt = cnt + VL;
-sumv = sumv + AR.*VR; cnt = cnt + VR;
-sumv = sumv + AU.*VU; cnt = cnt + VU;
-sumv = sumv + AD.*VD; cnt = cnt + VD;
+CL(~BL3) = C(~BL3);
+CR(~BR3) = C(~BR3);
+CU(~BU3) = C(~BU3);
+CD(~BD3) = C(~BD3);
 
-end
+Avg = 0.25*(CL + CR + CU + CD);
 
+R3 = repmat(rim,1,1,Nc);
+P3 = repmat(present,1,1,Nc);
 
-function Avg = Neighbour_Avg_Domain(A,domain)
-
-if size(A,2) == 1
-    AL = A; AR = A;
-    DL = domain; DR = domain;
-else
-    AL = A(:,[2,1:size(A,2)-1]);
-    AR = A(:,[2:size(A,2),size(A,2)-1]);
-    DL = domain(:,[2,1:size(A,2)-1]);
-    DR = domain(:,[2:size(A,2),size(A,2)-1]);
-end
-
-if size(A,1) == 1
-    AU = A; AD = A;
-    DU = domain; DD = domain;
-else
-    AU = A([2,1:size(A,1)-1],:);
-    AD = A([2:size(A,1),size(A,1)-1],:);
-    DU = domain([2,1:size(A,1)-1],:);
-    DD = domain([2:size(A,1),size(A,1)-1],:);
-end
-
-AL(~DL) = A(~DL);
-AR(~DR) = A(~DR);
-AU(~DU) = A(~DU);
-AD(~DD) = A(~DD);
-
-Avg = 0.25*(AL+AR+AU+AD);
+C(R3) = Avg(R3);
+C(P3) = C0(P3);
 
 end

@@ -5,43 +5,25 @@ function [STATE] = LE_Run_Mode_New(STATE,PARAM,MODEL)
 %2) 'GP': Grand potential based local equilibrium with fixed mu_e
 
 %Choose the mode
-mode       =  PARAM.LE_mode;
+mode       =  'LE';
+
+if isfield(PARAM,'LE_mode')
+    mode = PARAM.LE_mode;
+end
 
 %p mode on and off
-p_tail     =  5e-4;
-p_full     =  2e-2;
-p_on       =  6e-3;
-p_off      =  4e-3;
+p_tail     =  1e-3;
+p_full     =  5e-2;
+p_on       =  1e-2;
+p_off      =  8e-3;
 
 %Maximal number of active phases for LE/GP
 Pmax       =  4;
 
 %Local equilibrium parameters
-alpha_LE   = [0.9 0.7 0.4 0.3];
+alpha_LE   = [0.7 0.4 0.3 0.2];
 iter_LE    = [100 100 100 100];
 iter_GP    = [100 100 100 100];
-
-%Unpack fields and prepare the calculation
-ny         =  size(STATE.p,1);
-nx         =  size(STATE.p,2);
-N          =  ny*nx;
-p          =  UnpackP(STATE.p);
-c          =  UnpackC(STATE.c);
-E          =  UnpackCell(STATE.E);
-mu_e       =  UnpackCell(STATE.mu_e);
-chi        =  UnpackChi(STATE.chi);
-eta        =  reshape(PARAM.eta,1,[]);
-pars       =  MODEL.pars;
-
-%Phase index of the grains
-phase_index=  MODEL.phase_index(:).';
-
-%Collapse repeated grains into thermodynamic phases
-[pars,c,p,grain_to_phase] = CollapsePhases(pars,c,p,phase_index);
-
-%Phase number after collapse
-Np         =  size(p,3);
-Ne         =  numel(E);
 
 %Optional active-set controls
 if isfield(PARAM,'LE_p_tail')
@@ -59,11 +41,51 @@ end
 if isfield(PARAM,'LE_Pmax')
     Pmax = PARAM.LE_Pmax;
 end
+if isfield(PARAM,'LE_alpha_LE')
+    alpha_LE = PARAM.LE_alpha_LE;
+end
+if isfield(PARAM,'LE_iter_LE')
+    iter_LE = PARAM.LE_iter_LE;
+end
+if isfield(PARAM,'LE_iter_GP')
+    iter_GP = PARAM.LE_iter_GP;
+end
 
-Pmax = min(Pmax,Np);
+%Unpack fields and prepare the calculation
+ny         =  size(STATE.p,1);
+nx         =  size(STATE.p,2);
+N          =  ny*nx;
+p          =  UnpackP(STATE.p);
+c          =  UnpackC(STATE.c);
+E          =  UnpackCell(STATE.E);
+mu_e       =  UnpackCell(STATE.mu_e);
+chi        =  UnpackChi(STATE.chi);
+eta        =  reshape(PARAM.eta,1,[]);
+pars       =  MODEL.pars;
+
+%Keep grain-resolved fields before collapse
+p_grain    =  p;
+c_grain    =  c;
+
+%Grain-resolved active c-update mask.
+%This is the only grain-region mask used for writing c back.
+%Tiny numerical p tails below p_tail cannot receive updated c.
+grain_mask =  CalcThermoWeight_Tail(p_grain,p_tail,p_full) > 0;
+
+%Phase index of the grains
+phase_index=  MODEL.phase_index(:).';
+
+%Collapse repeated grains into thermodynamic phases
+[pars,c,p,grain_to_phase] = CollapsePhases(pars,c,p,phase_index);
+
+%Phase number after collapse
+Np         =  size(p,3);
+Ne         =  numel(E);
+Pmax       =  min(Pmax,Np);
 
 %Damping of the interface excess energy
 pars_orig      = pars;
+
 if isfield(PARAM,'w_scale_phase') && ~isempty(PARAM.w_scale_phase)
     pars_inter = Apply_WScale_Map(pars,PARAM.w_scale_phase,ny,nx);
 else
@@ -83,6 +105,10 @@ n_active_map       = reshape(sum(active,2),ny,nx);
 %Group grids by active phase set, this will be doing for LE or GP
 [active_sets,~,set_id] = unique(active,'rows');
 set_id_map             = reshape(set_id,ny,nx);
+
+%Elemental composition of all collapsed thermodynamic phases
+%This is used only for inactive mass-balance subtraction.
+e_all = Calc_e(pars_orig,c);
 
 %MAIN PART OF THE LE
 for iset = 1:size(active_sets,1)
@@ -109,18 +135,18 @@ for iset = 1:size(active_sets,1)
 
     %MODE 1: KKS TYPE LOCAL EQUILIBRIUM WITH E AND P FIXED
     if strcmpi(mode,'LE')
-        mm                     =  iter_LE(kk);
-        [~,~,E_loc]            =  SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
-        [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
-    end
 
-    %MODE 2: GRAND POTENTIAL (GP) WITH MU_E FIXED
-    if strcmpi(mode,'GP')
-        [~,~,E_loc]            =  SliceActiveMassBalance(pars_orig,c,p,E,ph_act,mask);
+        mm                     =  iter_LE(kk);
+        [~,~,E_loc]            =  SliceActiveMassBalance_FromE(c,p,E,e_all,ph_act,mask);
+        [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
+
+    elseif strcmpi(mode,'GP')
+
+        [~,~,E_loc]            =  SliceActiveMassBalance_FromE(c,p,E,e_all,ph_act,mask);
 
         %For one phase, use LE because E is the conserved variable.
         %For multiphase regions, use mass-consistent GP as smooth closure.
-        if k == 0
+        if k == 1
             mm                     =  iter_LE(kk);
             [c_loc,mu_loc,chi_loc] =  LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
         else
@@ -128,42 +154,39 @@ for iset = 1:size(active_sets,1)
             mu_loc                 =  SliceCell(mu_e,mask);
             [c_loc,chi_loc]        =  GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa,mm);
         end
+
+    else
+
+        error('LE_Run_Mode_New: unknown LE_mode "%s".',mode)
+
     end
 
-    %Assign back
+    %Assign back to collapsed thermodynamic phases
     c    = AssignC(c,ph_act,mask,c_loc);
     mu_e = AssignCell(mu_e,mask,mu_loc);
     chi  = AssignChi(chi,mask,chi_loc);
+
+    %Assign back to grain-resolved c only where:
+    % 1) the pixel was actually sent to this LE/GP local solve, and
+    % 2) the individual grain is active according to grain_mask.
+    c_grain = AssignC_ActiveMask_ToGrains(c_grain,grain_mask,grain_to_phase,ph_act,mask,c_loc);
 
 end
 
 % -------------------------------------------------------------------------
 % Pack output
 % -------------------------------------------------------------------------
-c_col       = PackC(c,ny);
+c_out       = PackC(c_grain,ny);
 E           = PackCell(E,ny);
 mu_e        = PackCell(mu_e,ny);
 chi         = PackChi(chi,ny);
 
-%Always calculate e from original thermodynamics
-e_col       = Calc_e(pars_orig,c_col);
-
-%Raw omega from full original thermodynamics
-omg_raw_col = CalcOmegaLocal(pars_orig,c,e_col,mu_e,ny,nx,Ne,Np);
-omg_col     = omg_raw_col;
-
-%Expand thermodynamic phases back to grains
-Ngrain      = numel(grain_to_phase);
-c_out       = cell(1,Ngrain);
-omg         = zeros(ny,nx,Ngrain);
-omg_raw     = zeros(ny,nx,Ngrain);
-
-for ig = 1:Ngrain
-    iph             = grain_to_phase(ig);
-    c_out{ig}       = c_col{iph};
-    omg(:,:,ig)     = omg_col(:,:,iph);
-    omg_raw(:,:,ig) = omg_raw_col(:,:,iph);
-end
+%Grain-resolved e and omega
+%e_out uses packed grain-resolved c_out.
+%omg uses unpacked c_grain so PhaseG receives row-vector fields.
+e_out       = Calc_e(MODEL.pars,c_out);
+omg_raw     = CalcOmegaLocal(MODEL.pars,c_grain,e_out,mu_e,ny,nx,Ne,numel(c_out));
+omg         = omg_raw;
 
 %Save active-set memory
 LE_state                 =  struct();
@@ -187,8 +210,7 @@ if isfield(PARAM,'regularize_chi_all') && PARAM.regularize_chi_all == 1
     else
         chi_floor = 1e-8;
     end
-    mask_all = true(ny,nx);
-    chi      = RegularizeChi_OnMask(chi,mask_all,chi_floor);
+    chi = RegularizeChi_OnMask(chi,true(ny,nx),chi_floor);
 end
 
 if isfield(PARAM,'smooth_chi_all') && PARAM.smooth_chi_all == 1
@@ -205,7 +227,7 @@ end
 
 %Update STATE
 STATE.c        = c_out;
-STATE.e        = Calc_e(MODEL.pars,c_out);
+STATE.e        = e_out;
 STATE.E        = E;
 STATE.mu_e     = mu_e;
 STATE.chi      = chi;
@@ -249,17 +271,11 @@ for ia = 1:numel(pars_cur)
         ws = reshape(pars_cur{ia}.w_scale,1,[]);
 
         if isscalar(ws)
-
             pars_cur{ia}.w_scale = ws;
-
         elseif numel(ws) == numel(mask)
-
             pars_cur{ia}.w_scale = ws(mask);
-
         elseif numel(ws) == nnz(mask)
-
             pars_cur{ia}.w_scale = ws;
-
         end
     end
 end
@@ -345,11 +361,11 @@ end
 % =========================================================================
 function [pars_c,c_c,p_c,grain_to_phase] = CollapsePhases(pars,c,p,phase_index)
 
-phase_id       = unique(phase_index,'stable');
-Ngrain         = numel(c);
-Nphase         = numel(phase_id);
-N              = size(p,2);
-grain_to_phase = zeros(1,Ngrain);
+phase_id        = unique(phase_index,'stable');
+Ngrain          = numel(c);
+Nphase          = numel(phase_id);
+N               = size(p,2);
+grain_to_phase  = zeros(1,Ngrain);
 
 for iph = 1:Nphase
     grain_to_phase(phase_index == phase_id(iph)) = iph;
@@ -361,18 +377,18 @@ c_c    = cell(1,Nphase);
 
 for iph = 1:Nphase
 
-    grains      = find(grain_to_phase == iph);
-    ig0         = grains(1);
-    pars_c{iph} = pars{ig0};
+    grains       = find(grain_to_phase == iph);
+    ig0          = grains(1);
+    pars_c{iph}  = pars{ig0};
 
     for ig = grains
         p_c(:,:,iph) = p_c(:,:,iph) + p(:,:,ig);
     end
 
-    Nc          = numel(c{ig0});
-    den         = reshape(p_c(:,:,iph),1,N);
-    good        = den > eps;
-    c_c{iph}    = cell(1,Nc);
+    Nc       = numel(c{ig0});
+    den      = reshape(p_c(:,:,iph),1,N);
+    good     = den > eps;
+    c_c{iph} = cell(1,Nc);
 
     for ic = 1:Nc
 
@@ -393,8 +409,10 @@ end
 end
 
 
-%Slice active phases and subtract inactive phase contribution from E
-function [c_blk,p_blk,E_blk] = SliceActiveMassBalance(pars,c,p,E,ph_act,mask)
+% =========================================================================
+% Slice / assign
+% =========================================================================
+function [c_blk,p_blk,E_blk] = SliceActiveMassBalance_FromE(c,p,E,e_all,ph_act,mask)
 
 Np    = numel(c);
 Ne    = numel(E);
@@ -408,15 +426,16 @@ Efix     = zeros(Ne,Nloc);
 
 for ii = 1:numel(inactive)
 
-    ip    = inactive(ii);
-    c_tmp = SliceC(c,ip,mask);
-    c_ip  = c_tmp{1};
+    ip   = inactive(ii);
+    p_ip = reshape(p(:,mask,ip),1,Nloc);
+    e_ip = zeros(Ne,Nloc);
 
-    R     = PhaseThermo(pars{ip},c_ip);
-    p_ip  = reshape(p(:,mask,ip),1,Nloc);
-    e_ip  = StackFields(R.e,Nloc);
+    for ie = 1:Ne
+        tmp        = reshape(e_all{ip}{ie},1,[]);
+        e_ip(ie,:) = tmp(mask);
+    end
 
-    Efix  = Efix + e_ip.*p_ip;
+    Efix = Efix + e_ip.*p_ip;
 
 end
 
@@ -472,9 +491,53 @@ for a = 1:numel(ph)
     ip = ph(a);
 
     for ic = 1:numel(c{ip})
-        x         = reshape(c{ip}{ic},1,[]);
-        x(mask)   = reshape(c_sub{a}{ic},1,[]);
-        c{ip}{ic} = x;
+        x          = reshape(c{ip}{ic},1,[]);
+        x(mask)    = reshape(c_sub{a}{ic},1,[]);
+        c{ip}{ic}  = x;
+    end
+end
+
+end
+
+
+function c_grain = AssignC_ActiveMask_ToGrains(c_grain,grain_mask,grain_to_phase,ph_act,mask,c_loc)
+
+ids = find(mask);
+
+if isempty(ids)
+    return
+end
+
+for ia = 1:numel(ph_act)
+
+    iph    = ph_act(ia);
+    grains = find(grain_to_phase == iph);
+
+    if isempty(grains)
+        continue
+    end
+
+    for ig = grains
+
+        gm   = reshape(grain_mask(:,:,ig),1,[]);
+        take = gm(ids);
+
+        if ~any(take)
+            continue
+        end
+
+        id_take = ids(take);
+
+        for ic = 1:numel(c_grain{ig})
+
+            A = reshape(c_grain{ig}{ic},1,[]);
+            B = reshape(c_loc{ia}{ic},1,[]);
+
+            A(id_take) = B(take);
+
+            c_grain{ig}{ic} = A;
+
+        end
     end
 end
 
@@ -507,17 +570,9 @@ end
 end
 
 
-function A = StackFields(fields,N)
-
-A = zeros(numel(fields),N);
-
-for i = 1:numel(fields)
-    A(i,:) = reshape(fields{i},1,N);
-end
-
-end
-
-
+% =========================================================================
+% WScale map
+% =========================================================================
 function pars_cur = Apply_WScale_Map(pars,w_scale_phase,ny,nx)
 
 pars_cur = pars;
@@ -538,6 +593,9 @@ end
 end
 
 
+% =========================================================================
+% Chi utilities
+% =========================================================================
 function chi = SmoothChi_Local(chi,nsmooth)
 
 Ne  = size(chi,1);
@@ -593,6 +651,9 @@ end
 end
 
 
+% =========================================================================
+% Active set
+% =========================================================================
 function [p_le,p_th,active] = BuildActiveSet_Tail(p,LE_state,Pmax,p_tail,p_full,p_on,p_off)
 
 N  = size(p,2);
@@ -644,8 +705,6 @@ for i = 1:N
     if sum(active(i,:)) > Pmax
 
         score = p2(i,:) + 0.5*p_on*active_old(i,:);
-
-        %Use physical p as fallback tie-breaker
         score = score + 1e-12*p_phys(i,:);
 
         [~,ord] = sort(score,'descend');

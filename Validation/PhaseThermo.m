@@ -108,16 +108,27 @@ aCat_all = sum(n_all,2);              % nAll x 1
 % -------------------------------------------------------------------------
 g_mech_real = c_realt * g0;           % N x 1
 
-z     = c_realt * zt + 1e-30;
+h18_model = IsTemkinH18(pars);
 
-eps0  = 1e-4;
-sz    = sqrt(z.^2 + eps0.^2);
-lz    = log(z + sz) - log(2);
-dphi_z  = lz + z ./ sz;
-d2phi_z = (z.^2 + 2*eps0.^2) ./ (sz.^3);
+if h18_model
+    % Thermolab special case for Melt(H18): temkin_H18 modifies z and mtpl,
+    % then sets zt = ones. Keep g exact and compute only this ideal term's
+    % derivatives numerically, vectorized over all grids.
+    [g_id,mu_id,H_id] = TemkinH18_IdealDeriv(pars,c_realt,RT);
+else
+    z     = c_realt * zt + 1e-30;
 
-Azt     = zt .* log(zt + double(zt==0));
-g_id    = RT * sum(mtpl .* ( z .* lz - c_realt * Azt ), 2);
+    eps0  = 1e-4;
+    sz    = sqrt(z.^2 + eps0.^2);
+    lz    = log(z + sz) - log(2);
+    dphi_z  = lz + z ./ sz;
+    d2phi_z = (z.^2 + 2*eps0.^2) ./ (sz.^3);
+
+    Azt     = zt .* log(zt + double(zt==0));
+    g_id    = RT * sum(mtpl .* ( z .* lz - c_realt * Azt ), 2);
+    mu_id   = RT * ( (mtpl .* dphi_z) * zt.' - mtpl * Azt.' );
+end
+
 alp_eff = [1 T P] * alp;
 W       = w(:,:,1) + w(:,:,2)*T + w(:,:,3)*P;
 
@@ -183,7 +194,6 @@ g        = G_scaled .* invcat;      % N x 1
 % REAL block dG/dc_real
 mu_nid  = w_scale .* (v .* invq - (n_nid .* invq2) .* a.');
 mu_mech = g0.';
-mu_id   = RT * ( (mtpl .* dphi_z) * zt.' - mtpl * Azt.' );
 
 dG_real = mu_mech + mu_id + mu_nid;                  % N x nReal
 
@@ -250,11 +260,13 @@ end
 % -------------------------------------------------------------------------
 
 % REAL-REAL Hessian
-H_id = zeros(nReal,nReal,Npt);
-for is = 1:size(zt,2)
-    zs    = zt(:,is) * zt(:,is).';
-    coeff = RT * ( mtpl(:,is) .* d2phi_z(:,is) );
-    H_id  = H_id + zs .* reshape(coeff,1,1,Npt);
+if ~h18_model
+    H_id = zeros(nReal,nReal,Npt);
+    for is = 1:size(zt,2)
+        zs    = zt(:,is) * zt(:,is).';
+        coeff = RT * ( mtpl(:,is) .* d2phi_z(:,is) );
+        H_id  = H_id + zs .* reshape(coeff,1,1,Npt);
+    end
 end
 
 vT      = v.';
@@ -365,7 +377,194 @@ end
 
 
 function c = UnpackC(c)
+if ~iscell(c)
+    return
+end
 for ic = 1:numel(c)
     c{ic} = reshape(c{ic},1,[]);
 end
+end
+
+function tf = IsTemkinH18(pars)
+%ISTEMKINH18 True only for the Holland et al. 2018 melt special case.
+
+tf = false;
+
+if ~isfield(pars,'phase_name') || isempty(pars.phase_name)
+    return
+end
+
+phase_name = pars.phase_name;
+if iscell(phase_name)
+    phase_name = phase_name{1};
+end
+phase_name = char(phase_name);
+
+tf = strcmp(phase_name,'Melt(H18)');
+
+if tf && isfield(pars,'mod_id') && ~isempty(pars.mod_id)
+    tf = pars.mod_id == 4;
+end
+
+end
+
+
+function [g_id,mu_id,H_id] = TemkinH18_IdealDeriv(pars,p,RT)
+%TEMKINH18_IDEALDERIV Vectorized FD derivatives of only the H18 ideal term.
+%
+% p is N x nReal. Output mu_id is N x nReal and H_id is nReal x nReal x N.
+% This is much faster than finite-differencing the complete PhaseG at each grid.
+
+Npt   = size(p,1);
+nReal = size(p,2);
+
+g_id  = TemkinH18_Gid_Raw(pars,p,RT);
+mu_id = zeros(Npt,nReal);
+H_id  = zeros(nReal,nReal,Npt);
+
+if isfield(pars,'fd_h') && ~isempty(pars.fd_h)
+    h0 = pars.fd_h;
+else
+    h0 = 1e-6;
+end
+
+for i = 1:nReal
+
+    hi = h0 * max(1,abs(p(:,i)));
+
+    pp = p;
+    pm = p;
+    pp(:,i) = pp(:,i) + hi;
+    pm(:,i) = pm(:,i) - hi;
+
+    fp = TemkinH18_Gid_Raw(pars,pp,RT);
+    fm = TemkinH18_Gid_Raw(pars,pm,RT);
+
+    mui = (fp - fm) ./ (2*hi);
+    Hii = (fp - 2*g_id + fm) ./ (hi.^2);
+
+    bad = ~isfinite(mui) | ~isreal(mui);
+    mui(bad) = 0;
+
+    bad = ~isfinite(Hii) | ~isreal(Hii);
+    Hii(bad) = 0;
+
+    mu_id(:,i)  = mui;
+    H_id(i,i,:) = reshape(Hii,1,1,Npt);
+
+end
+
+for i = 1:nReal-1
+
+    hi = h0 * max(1,abs(p(:,i)));
+
+    for j = i+1:nReal
+
+        hj = h0 * max(1,abs(p(:,j)));
+
+        ppp = p;
+        ppm = p;
+        pmp = p;
+        pmm = p;
+
+        ppp(:,i) = ppp(:,i) + hi;
+        ppp(:,j) = ppp(:,j) + hj;
+
+        ppm(:,i) = ppm(:,i) + hi;
+        ppm(:,j) = ppm(:,j) - hj;
+
+        pmp(:,i) = pmp(:,i) - hi;
+        pmp(:,j) = pmp(:,j) + hj;
+
+        pmm(:,i) = pmm(:,i) - hi;
+        pmm(:,j) = pmm(:,j) - hj;
+
+        fpp = TemkinH18_Gid_Raw(pars,ppp,RT);
+        fpm = TemkinH18_Gid_Raw(pars,ppm,RT);
+        fmp = TemkinH18_Gid_Raw(pars,pmp,RT);
+        fmm = TemkinH18_Gid_Raw(pars,pmm,RT);
+
+        Hij = (fpp - fpm - fmp + fmm) ./ (4*hi.*hj);
+
+        bad = ~isfinite(Hij) | ~isreal(Hij);
+        Hij(bad) = 0;
+
+        H_id(i,j,:) = reshape(Hij,1,1,Npt);
+        H_id(j,i,:) = reshape(Hij,1,1,Npt);
+
+    end
+end
+
+H_id(~isfinite(H_id)) = 0;
+H_id = 0.5 * (H_id + permute(H_id,[2 1 3]));
+
+end
+
+
+function g_id = TemkinH18_Gid_Raw(pars,p,RT)
+%TEMKINH18_GID_RAW Raw ideal Gibbs term for Melt(H18), before normalization.
+
+[z,mtpl_eff] = TemkinH18_Z_Mtpl(pars,p);
+zlogz        = z .* log(z + double(z==0));
+g_id         = RT * sum(mtpl_eff .* zlogz, 2);
+
+end
+
+
+function [z,mtpl_eff] = TemkinH18_Z_Mtpl(pars,p)
+%TEMKINH18_Z_MTPL Reproduce Thermolab temkin_H18 for Melt(H18).
+%
+% This follows:
+%   z = p*zt
+%   z(z near 1) = 1
+%   z(z near 0) = 1e-20
+%   eval(z_fac)
+%   z = z.*z_fac
+%   eval(z_name)
+%   eval(mtpl)
+% Thermolab then sets zt = ones(size(zt)), so the subtraction term in
+% Sconf is exactly zero.
+
+zt = pars.zt;
+
+if isfield(pars,'z_tol') && ~isempty(pars.z_tol)
+    z_tol = pars.z_tol;
+else
+    z_tol = 0;
+end
+
+z = p * zt;
+z(z < 1+z_tol & z > 1-z_tol) = 1;
+z(z <   z_tol & z >  -z_tol) = 1e-20;
+
+if isfield(pars,'p_name') && any(strcmp(pars.p_name,'ctL,tc-ds633'))
+    yct = p(:,strcmp(pars.p_name,'ctL,tc-ds633'));
+else
+    yct = zeros(size(p,1),1);
+end
+
+z_fac = ones(size(z));
+if isfield(pars,'z_fac') && ~isempty(pars.z_fac)
+    eval(pars.z_fac);
+end
+
+z = z .* z_fac;
+
+if isfield(pars,'z_name') && ~isempty(pars.z_name)
+    eval(pars.z_name);
+end
+
+if isnumeric(pars.mtpl)
+    mtpl_eff = pars.mtpl;
+else
+    eval(pars.mtpl);
+    mtpl_eff = mtpl;
+end
+
+if isscalar(mtpl_eff)
+    mtpl_eff = mtpl_eff * ones(size(z));
+elseif size(mtpl_eff,1) == 1 && size(z,1) > 1
+    mtpl_eff = repmat(mtpl_eff,size(z,1),1);
+end
+
 end
