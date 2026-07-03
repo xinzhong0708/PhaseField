@@ -1,3 +1,14 @@
+%% Create_CpxPure_Perturbed.m
+% Pure pseudo-1D clinopyroxene map with optional random c perturbation.
+%
+% Purpose:
+%   1) one thermodynamic phase only: Clinopyroxene
+%   2) one grain only
+%   3) no artificial interface / no band-width allocator
+%   4) optional zero-mean random perturbation in independent c variables
+%
+% The perturbation is useful for testing spinodal-like instability in pure Cpx.
+
 clear; clf
 
 addpath('..\bin')
@@ -15,34 +26,29 @@ sync_eta_from_metadata = 1;
 
 if sync_PT_from_metadata == 1
     [T,P] = Read_First_PT_From_Metadata(metadata_file,1,1);
+else
+    T = 1;
+    P = 1;
 end
 
 Cname  = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 solmod = 'solution_models_PFM';
 
-% Thermodynamic phase order used everywhere in MODEL.phase_index.
-phs_name = {'Garnet','Clinopyroxene','Kyanite','Quartz'};
+% Pure Cpx only
+phs_name = {'Clinopyroxene'};
 
-% Requested phase proportions in the phs_name order above.
-% They do not need to sum to one.
-phase_prop = [0.05 0.4 0.3 0.2];
-phase_prop = phase_prop/sum(phase_prop);
+phase_prop = 1.0;
 
-% Initial independent endmember compositions in the phs_name order above.
+% Initial independent Cpx composition.
+% Adjust this vector to the number/order of independent Cpx variables in
+% your solution model.
 c_value = cell(1,numel(phs_name));
-c_value{1} = [0.50 0.50]; 
-c_value{2} = [0.01 0.41 0.01 0.50];         
-c_value{3} = [1];         
-c_value{4} = [1];         
+c_value{1} = [0.20 0.41 0.12 0.50];
 
-% Symmetric band order.  The middle band is the Garnet seed.
-band_phase_name = {'Quartz','Kyanite','Clinopyroxene','Garnet','Clinopyroxene','Kyanite','Quartz'};
-
-% Domain.  nx=320 gives exact integer widths for the default phase_prop:
-% kya/cpx/qtz/grt/qtz/cpx/kya = 50/75/25/20/25/75/50.
+% Domain
 Lx = 100e-6;
 Ly = 100e-6;
-nx = 800;
+nx = 300;
 ny = 4;
 
 % Scaling / penalty
@@ -56,9 +62,9 @@ L_sc        = PHYS.L_sc;
 vref        = PHYS.vref;
 eta0        = 4000e10/E_sc;
 
-% Initial eta used to build E.
-init_eta_mode        = 'interface_damped';  % 'uniform' or 'interface_damped'
-init_eta_damp_factor = 0.1;
+% Since this is pure Cpx, there is no interface. Uniform eta is cleaner.
+init_eta_mode        = 'uniform';  % 'uniform' only recommended here
+init_eta_damp_factor = 1.0;
 init_eta_q2          = 4;
 init_eta_p02         = 3e-3;
 init_eta_q3          = 4;
@@ -67,11 +73,28 @@ init_eta_nsmooth     = 1;
 init_eta_halo_cut    = 1e-3;
 
 % Reference LE controls
-init_ref_phase_prop_mode = 'requested';     % 'requested' or 'realised_p'
-init_ref_eta_mode        = 'bulk';          % 'bulk' or 'harmonic_init'
+init_ref_eta_mode = 'bulk';        % 'bulk' or 'harmonic_init'
 
-% Initial nonlinear LE projection before saving
-do_initial_LE = 1;
+% Initial nonlinear LE projection before saving.
+% For spinodal tests, set this to 0 if you want to preserve exactly the
+% perturbed initial c. If set to 1, LE will make E/c/mu fully consistent.
+do_initial_LE = 0;
+
+% -------------------------------------------------------------------------
+% Composition perturbation
+% -------------------------------------------------------------------------
+perturb_c          = 1;
+perturb_pseudo1D   = 1;            % 1 = same random profile in every y row
+perturb_seed       = 1;
+
+% One amplitude per independent Cpx variable.
+% If scalar, it is applied only to c{1}.
+perturb_amp        = [1e-3 0 0 0];
+
+% Random perturbation smoothing.
+% 0 = white noise
+% >0 = smoothed random noise
+perturb_corr_width = 3;
 
 if sync_eta_from_metadata == 1
     [eta0,init_eta_damp_factor] = Read_Init_Eta_From_Metadata( ...
@@ -114,57 +137,36 @@ GRID.Lx    = Lx/L_sc;
 GRID.Ly    = Ly/L_sc;
 
 %% ========================================================================
-%  Symmetric phase/grain map
+%  Pure Cpx phase/grain map
 % ========================================================================
 
-grain_phase = Phase_Names_To_ID(phs_name,band_phase_name);
-Ngrain      = numel(grain_phase);
+grain_phase = 1;
+Ngrain      = 1;
 Np          = Ngrain;
 
-[band_width,band_fraction] = Local_Symmetric_Band_Widths( ...
-    phase_prop,grain_phase,nx);
+phi      = ones(ny,nx,Ngrain);
+phase_ID = ones(ny,nx);
+grain_ID = ones(ny,nx);
+seed_xy  = [mean(x),mean(y)];
 
-phi      = zeros(ny,nx,Ngrain);
-phase_ID = zeros(ny,nx);
-grain_ID = zeros(ny,nx);
-seed_xy  = zeros(Ngrain,2);
-
-ix1 = 1;
-for ig = 1:Ngrain
-
-    ix2 = ix1 + band_width(ig) - 1;
-    iph = grain_phase(ig);
-
-    phi(:,ix1:ix2,ig)   = 1;
-    phase_ID(:,ix1:ix2) = iph;
-    grain_ID(:,ix1:ix2) = ig;
-
-    seed_xy(ig,1) = mean(x(ix1:ix2));
-    seed_xy(ig,2) = mean(y);
-
-    ix1 = ix2 + 1;
-
-end
+band_phase_name = {'Clinopyroxene'};
+band_width      = nx;
+band_fraction   = 1;
 
 Check_Initial_Phi_Map(phi,grain_ID)
 
-phase_prop_geom = Compute_Phase_Fraction_From_Map(phase_ID,Nphase);
+phase_prop_geom = 1;
 
-% Zero orientation for pseudo-1D symmetric bands.
+% Zero orientation for pseudo-1D pure Cpx.
 theta_grain = zeros(1,Ngrain);
 
-fprintf('Band order:\n')
-for ig = 1:Ngrain
-    fprintf('  grain %d: %-16s width = %d cells, x = %.4e m\n', ...
-        ig,phs_name{grain_phase(ig)},band_width(ig),seed_xy(ig,1)*L_sc)
-end
+fprintf('Pure Cpx map:\n')
+fprintf('  grain %d: %-16s width = %d cells, x = %.4e m\n', ...
+    1,phs_name{grain_phase},band_width,seed_xy(1)*L_sc)
 
 fprintf('\nPhase             requested        realised area fraction      difference\n')
-for ip = 1:Nphase
-    fprintf('%-16s    %.8f         %.8f                 %+.3e\n', ...
-        phs_name{ip},phase_prop(ip),phase_prop_geom(ip), ...
-        phase_prop_geom(ip)-phase_prop(ip))
-end
+fprintf('%-16s    %.8f         %.8f                 %+.3e\n', ...
+    phs_name{1},phase_prop,phase_prop_geom,phase_prop_geom-phase_prop)
 
 %% ========================================================================
 %  MODEL
@@ -203,7 +205,7 @@ imagesc(x*1e6,y*1e6,phase_ID)
 set(gca,'YDir','normal')
 axis image tight
 colorbar
-title('Symmetric pseudo-1D map: kya cpx qtz grt qtz cpx kya')
+title('Pure pseudo-1D clinopyroxene map')
 xlabel('x (\mum)')
 ylabel('y (\mum)')
 drawnow
@@ -215,14 +217,7 @@ drawnow
 p = Calc_p(MODEL,phi);
 
 p_phase_ref    = Collapse_p_By_Phase(p,MODEL.phase_index,Nphase);
-phase_prop_ref = zeros(1,Nphase);
-
-for ip = 1:Nphase
-    tmp = p_phase_ref(:,:,ip);
-    phase_prop_ref(ip) = mean(tmp(:));
-end
-
-phase_prop_ref = phase_prop_ref/sum(phase_prop_ref);
+phase_prop_ref = 1;
 
 eta_bulk = eta0*ones(ny,nx);
 
@@ -234,6 +229,8 @@ switch lower(init_eta_mode)
 
     case 'interface_damped'
 
+        % This branch is kept for compatibility, but pure Cpx has no phase
+        % interface. Uniform eta is recommended for this file.
         if exist('Eta_Damping_SmoothHalo','file') == 2
             eta_init = Eta_Damping_SmoothHalo( ...
                 p_phase_ref,eta_bulk,init_eta_damp_factor*eta_bulk, ...
@@ -251,17 +248,6 @@ switch lower(init_eta_mode)
 
 end
 
-switch lower(init_ref_phase_prop_mode)
-    case 'requested'
-        phase_prop_le_ref = phase_prop;
-    case 'realised_p'
-        phase_prop_le_ref = phase_prop_ref;
-    otherwise
-        error('Unknown init_ref_phase_prop_mode: %s',init_ref_phase_prop_mode)
-end
-
-phase_prop_le_ref = phase_prop_le_ref/sum(phase_prop_le_ref);
-
 switch lower(init_ref_eta_mode)
     case 'bulk'
         eta_ref = eta0;
@@ -271,7 +257,7 @@ switch lower(init_ref_eta_mode)
         error('Unknown init_ref_eta_mode: %s',init_ref_eta_mode)
 end
 
-p_ref    = reshape(phase_prop_le_ref,1,1,Nphase);
+p_ref    = reshape(phase_prop,1,1,Nphase);
 E_target = Calc_E_Tot(e_guess,p_ref);
 
 [c_ref,mu_ref] = LE_Calculator(pars_phase,p_ref,c_guess,E_target,eta_ref,[0.1,2000]);
@@ -295,9 +281,9 @@ for ip = 1:Nphase
     for ie = 1:Ne
         omega_ref(ip) = omega_ref(ip) - e_ref{ip}{ie}.*mu_ref{ie};
     end
-
 end
 
+% Build spatial Cpx c field from reference c, then perturb it.
 c_phase = cell(1,Nphase);
 
 for ip = 1:Nphase
@@ -308,10 +294,32 @@ for ip = 1:Nphase
     end
 end
 
+if perturb_c == 1
+
+    Nc = numel(c_phase{1});
+    amp = Expand_Perturb_Amp(perturb_amp,Nc);
+
+    rng(perturb_seed)
+
+    for ic = 1:Nc
+
+        if amp(ic) == 0
+            continue
+        end
+
+        Pmap = Build_Random_Perturbation_Map( ...
+            ny,nx,perturb_pseudo1D,perturb_corr_width);
+
+        c_phase{1}{ic} = c_phase{1}{ic} + amp(ic).*Pmap;
+
+    end
+end
+
 c = Expand_c_By_Phase(c_phase,MODEL.phase_index);
 e = Calc_e(pars,c);
 E = Calc_E_Tot(e,p);
 
+% Add the same penalty offset used by the reference state.
 for ie = 1:Ne
     E{ie} = E{ie} + E_offset{ie};
 end
@@ -327,8 +335,10 @@ chi = repmat({zeros(ny,nx)},Ne,Ne);
 
 fprintf('\nInitial eta mode = %s, eta range = %.4e to %.4e, eta_ref = %.4e\n', ...
     init_eta_mode,min(eta_init(:)),max(eta_init(:)),eta_ref)
-fprintf('Reference LE phase proportions (%s):',init_ref_phase_prop_mode)
-fprintf(' %.8f',phase_prop_le_ref)
+fprintf('Perturb c = %d, random pseudo1D = %d\n', ...
+    perturb_c,perturb_pseudo1D)
+fprintf('Perturb amp:')
+fprintf(' %.4e',Expand_Perturb_Amp(perturb_amp,numel(c_phase{1})))
 fprintf('\n')
 
 %% ========================================================================
@@ -348,9 +358,15 @@ PARAM.P          = P;
 PARAM.init_eta_mode            = init_eta_mode;
 PARAM.init_eta_damp_factor     = init_eta_damp_factor;
 PARAM.init_eta_synced_E        = 1;
-PARAM.init_ref_phase_prop_mode = init_ref_phase_prop_mode;
+PARAM.init_ref_phase_prop_mode = 'pure_cpx';
 PARAM.init_ref_eta_mode        = init_ref_eta_mode;
 PARAM.theta_grain              = theta_grain;
+
+PARAM.perturb_c          = perturb_c;
+PARAM.perturb_pseudo1D   = perturb_pseudo1D;
+PARAM.perturb_seed       = perturb_seed;
+PARAM.perturb_amp        = perturb_amp;
+PARAM.perturb_corr_width = perturb_corr_width;
 
 STATE          = struct();
 STATE.c        = c;
@@ -389,12 +405,7 @@ if do_initial_LE == 1
 end
 
 p_phase        = Collapse_p_By_Phase(STATE.p,MODEL.phase_index,Nphase);
-phase_prop_map = zeros(1,Nphase);
-
-for ip = 1:Nphase
-    tmp = p_phase(:,:,ip);
-    phase_prop_map(ip) = mean(tmp(:));
-end
+phase_prop_map = 1;
 
 dc_max = 0;
 
@@ -435,11 +446,11 @@ eta  = eta_bulk;
 %  Save
 % ========================================================================
 
-map_mode        = 'bands';
+map_mode        = 'pure_cpx_perturbed';
 grain_size      = NaN;
 grain_size_real = NaN;
 Ngrain_user     = [];
-rng_seed        = [];
+rng_seed        = perturb_seed;
 periodic_map    = 0;
 
 save('Map2d.mat', ...
@@ -448,154 +459,98 @@ save('Map2d.mat', ...
     'pars','Np','Ne','Nphase','Ngrain', ...
     'T','P','Cname','solmod', ...
     'phs_name','phase_prop','phase_prop_geom','phase_prop_ref', ...
-    'phase_prop_le_ref','phase_prop_map', ...
+    'phase_prop_map', ...
     'map_mode','grain_ID','phase_ID','grain_phase','seed_xy','theta_grain', ...
     'grain_size','grain_size_real','Ngrain_user','rng_seed','periodic_map', ...
     'band_phase_name','band_width','band_fraction', ...
-    'init_ref_phase_prop_mode','init_ref_eta_mode', ...
+    'init_ref_eta_mode', ...
     'init_eta_mode','init_eta_damp_factor','init_eta_q2','init_eta_p02', ...
     'init_eta_q3','init_eta_p03','init_eta_nsmooth','init_eta_halo_cut', ...
     'eta_ref','E_target','E_offset','E_offset_ref','E_bulk_shift', ...
     'c_ref','mu_ref','omega_ref', ...
+    'perturb_c','perturb_pseudo1D','perturb_amp', ...
+    'perturb_seed','perturb_corr_width', ...
     'c','e','E','p','mu_e','chi','phi')
 
 fprintf('\nSaved Map2d.mat\n')
-fprintf('Saved symmetric band order:\n')
-disp(band_phase_name)
+fprintf('Saved pure Cpx perturbed map.\n')
 
 %% ========================================================================
 %  Local helper functions
 % ========================================================================
 
-function phase_id = Phase_Names_To_ID(phs_name,phase_name)
+function amp = Expand_Perturb_Amp(amp_in,Nc)
 
-phase_id = zeros(1,numel(phase_name));
+if isscalar(amp_in)
+    amp = zeros(1,Nc);
+    amp(1) = amp_in;
+else
+    amp = zeros(1,Nc);
+    n = min(Nc,numel(amp_in));
+    amp(1:n) = amp_in(1:n);
+end
 
-for i = 1:numel(phase_name)
+end
 
-    id = find(strcmpi(phs_name,phase_name{i}),1,'first');
 
-    if isempty(id)
-        error('Phase "%s" is not in phs_name.',phase_name{i})
+function Pmap = Build_Random_Perturbation_Map(ny,nx,pseudo1D,corr_width)
+
+if pseudo1D == 1
+
+    p1 = randn(1,nx);
+    p1 = Smooth1_Local(p1,corr_width);
+    p1 = p1 - mean(p1);
+    p1 = p1./max(max(abs(p1)),eps);
+
+    Pmap = repmat(p1,ny,1);
+
+else
+
+    Pmap = randn(ny,nx);
+
+    for i = 1:corr_width
+        Pmap = Smooth2_Local(Pmap);
     end
 
-    phase_id(i) = id;
+    Pmap = Pmap - mean(Pmap(:));
+    Pmap = Pmap./max(max(abs(Pmap(:))),eps);
 
 end
 
 end
 
+function a = Smooth1_Local(a,npass)
 
-function [band_width,band_fraction] = Local_Symmetric_Band_Widths(phase_prop,band_order,nx)
-
-Nband = numel(band_order);
-
-if mod(Nband,2) ~= 1
-    error('Local_Symmetric_Band_Widths requires an odd number of bands.')
+for k = 1:npass
+    b = a;
+    b(2:end)     = b(2:end)     + a(1:end-1);
+    b(1:end-1)   = b(1:end-1)   + a(2:end);
+    cnt          = ones(size(a));
+    cnt(2:end)   = cnt(2:end)   + 1;
+    cnt(1:end-1) = cnt(1:end-1) + 1;
+    a = b./cnt;
 end
-
-ic = (Nband+1)/2;
-
-for i = 1:ic-1
-    if band_order(i) ~= band_order(Nband+1-i)
-        error('Band order is not symmetric.')
-    end
-end
-
-Nphase = numel(phase_prop);
-Noccur = accumarray(band_order(:),1,[Nphase,1]).';
-
-band_fraction = phase_prop(band_order)./Noccur(band_order);
-band_fraction = band_fraction/sum(band_fraction);
-
-target = nx*band_fraction;
-npair  = ic-1;
-
-best_err = inf;
-best_w   = [];
-
-for wc = 1:nx-2*npair
-
-    if mod(nx-wc,2) ~= 0
-        continue
-    end
-
-    side = (nx-wc)/2;
-
-    if side < npair
-        continue
-    end
-
-    wleft = Allocate_Integer_Widths(target(1:npair),side);
-    w     = [wleft,wc,fliplr(wleft)];
-
-    err = sum((w-target).^2);
-
-    if err < best_err
-        best_err = err;
-        best_w   = w;
-    end
-
-end
-
-if isempty(best_w)
-    error('Could not build symmetric band widths.')
-end
-
-band_width = best_w;
 
 end
 
 
-function width = Allocate_Integer_Widths(target,total_width)
+function A = Smooth2_Local(A)
 
-target = target(:).';
-target = max(target,eps);
-raw    = total_width*target/sum(target);
+[ny,nx] = size(A);
+B       = A;
+cnt     = ones(ny,nx);
 
-width = floor(raw);
-width(raw > 0 & width < 1) = 1;
+B(:,2:end)     = B(:,2:end)     + A(:,1:end-1);
+cnt(:,2:end)   = cnt(:,2:end)   + 1;
+B(:,1:end-1)   = B(:,1:end-1)   + A(:,2:end);
+cnt(:,1:end-1) = cnt(:,1:end-1) + 1;
 
-while sum(width) < total_width
+B(2:end,:)     = B(2:end,:)     + A(1:end-1,:);
+cnt(2:end,:)   = cnt(2:end,:)   + 1;
+B(1:end-1,:)   = B(1:end-1,:)   + A(2:end,:);
+cnt(1:end-1,:) = cnt(1:end-1,:) + 1;
 
-    res = raw - width;
-    [~,ord] = sort(res,'descend');
-
-    for k = 1:numel(ord)
-        width(ord(k)) = width(ord(k)) + 1;
-        if sum(width) == total_width
-            break
-        end
-    end
-
-end
-
-while sum(width) > total_width
-
-    res = raw - width;
-    [~,ord] = sort(res,'ascend');
-
-    changed = 0;
-
-    for k = 1:numel(ord)
-
-        ii = ord(k);
-
-        if width(ii) > 1
-            width(ii) = width(ii) - 1;
-            changed = 1;
-        end
-
-        if sum(width) == total_width
-            break
-        end
-    end
-
-    if changed == 0
-        error('Allocate_Integer_Widths failed.')
-    end
-
-end
+A = B./cnt;
 
 end
 
@@ -626,18 +581,6 @@ for ip = 1:Nphase
 
     pars_phase{ip}  = pars;
 
-end
-
-end
-
-
-function phase_prop_geom = Compute_Phase_Fraction_From_Map(phase_ID,Nphase)
-
-phase_prop_geom = zeros(1,Nphase);
-N = numel(phase_ID);
-
-for ip = 1:Nphase
-    phase_prop_geom(ip) = nnz(phase_ID == ip)/N;
 end
 
 end

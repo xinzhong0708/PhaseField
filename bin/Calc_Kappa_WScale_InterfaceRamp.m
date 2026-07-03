@@ -50,10 +50,10 @@ function [PARAM] = Calc_Kappa_WScale_InterfaceRamp(STATE,PARAM,MODEL,PHYS,NUM)
 % -------------------------------------------------------------------------
 p_interface    = 0.999;
 p_presence     = 1e-5;
-zero_width     = 2;
-ramp_width     = 2;
+zero_width     = 6;
+ramp_width     = 6;
 kappa_min_frac = 1;
-w_scale_min    = 0.7;
+w_scale_min    = 1;
 
 if isfield(PARAM,'ramp_p_interface')
     p_interface = PARAM.ramp_p_interface;

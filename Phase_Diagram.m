@@ -12,14 +12,14 @@ P             =  3e8;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'    'Ca'   'Al'     'Si'    'O'};
-Nsys          = [0.0990    0.1193    0.0032    0.2269];
+Nsys          = [0.1038    0.1209    0.0041    0.2274];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 % Choose phases considered in Gibbs minimization.  Keep the order consistent
 % with the PFM map/MODEL.phs_name so printed phase proportions can be
 % compared directly with PF phase columns.
-phs_name      = {'Orthopyroxene','Garnet','Kyanite','Quartz'};
-phs_name      = {'Kyanite','Clinopyroxene','Garnet','Quartz'};
+phs_name      = {'Clinopyroxene','Garnet','Kyanite','Quartz'};
+% phs_name      = {'Clinopyroxene','Garnet'};
 td            =  init_thermo(phs_name,Cname,solmod);
 p             =  props_generate(td);     % generate endmember proportions
 

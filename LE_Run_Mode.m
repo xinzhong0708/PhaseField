@@ -35,10 +35,13 @@ if isfield(PARAM,'LE_Pmax'), Pmax = PARAM.LE_Pmax; end
 
 %Local equilibrium parameters
 alpha_LE   = [0.6 0.4 0.3 0.2];
+alpha_GP   = [0.2 0.1 0.05 0.02];
+
 iter_LE    = [100 100 100 100];
-iter_GP    = [100 100 100 100];
+iter_GP    = [80 200 300 300];
 
 if isfield(PARAM,'LE_alpha_LE'), alpha_LE = PARAM.LE_alpha_LE; end
+if isfield(PARAM,'LE_alpha_GP'), alpha_GP = PARAM.LE_alpha_GP; end
 if isfield(PARAM,'LE_iter_LE'),  iter_LE  = PARAM.LE_iter_LE;  end
 if isfield(PARAM,'LE_iter_GP'),  iter_GP  = PARAM.LE_iter_GP;  end
 
@@ -52,6 +55,14 @@ E          =  UnpackCell(STATE.E);
 mu_e       =  UnpackCell(STATE.mu_e);
 chi        =  UnpackChi(STATE.chi);
 pars       =  MODEL.pars;
+
+%Old closure fields for optional under-relaxation.
+mu_e_old   =  mu_e;
+if isfield(STATE,'omg') && ~isempty(STATE.omg)
+    omg_old = STATE.omg;
+else
+    omg_old = [];
+end
 
 %Prepare eta
 if isscalar(PARAM.eta)
@@ -98,15 +109,32 @@ end
 %This is used to subtract inactive grains from E_loc.
 e_grain = Calc_e(MODEL.pars,c_grain);
 
-
-%Find active thermodynamic phases using phase-collapsed p
-if isfield(STATE,'LE_state') && ~isempty(STATE.LE_state)
-    LE_state_old = STATE.LE_state;
-else
-    LE_state_old = struct();
-end
-
+%Find active thermodynamic phases using phase-collapsed p.
 [p_le,p_th,active] = BuildActiveSet_Tail(p_phase,LE_state_old,Pmax,p_tail,p_full,p_on,p_off);
+
+%In GP mode, do not send almost-pure nodes to GP just because a tiny tail
+%phase is kept active by hysteresis. This reduces intermittent slow LE2.
+if strcmpi(mode,'GP')
+
+    GP_mixed_tol = 1e-4;
+
+    if isfield(PARAM,'GP_mixed_tol')
+        GP_mixed_tol = PARAM.GP_mixed_tol;
+    end
+
+    p_phys = reshape(p_phase,N,Np);
+    [pmax_phys,iph_max] = max(p_phys,[],2);
+
+    pure_like = pmax_phys > 1 - GP_mixed_tol;
+
+    for ii = find(pure_like).'
+        active(ii,:) = false;
+        active(ii,iph_max(ii)) = true;
+    end
+
+    %Rebuild diagnostic p_le after active-set cleanup.
+    p_le = RebuildPLeFromActive(p_phase,active,p_tail,p_full);
+end
 
 n_active_map       = reshape(sum(active,2),ny,nx);
 
@@ -139,24 +167,36 @@ for iset = 1:size(active_sets,1)
 
     [pars_loc,c_loc,p_loc,E_loc,eta_loc] = BuildLocalLEBlock(pars_use,c_grain,p_grain,e_grain,E,eta,phase_index,phase_id,ph_act,ids);
 
-    %Choose damping based on number of active phases
-    kk = min(k,numel(alpha_LE));
-    aa = alpha_LE(kk);
+    %Choose damping based on number of active phases.
+    %GP is deliberately more damped than LE for interface stability.
+    kk_LE = min(k,numel(alpha_LE));
+    kk_GP = min(k,numel(alpha_GP));
+
+    aa_LE = alpha_LE(kk_LE);
+    aa_GP = alpha_GP(kk_GP);
+
     diag_loc = InitLocalLEDiag(numel(ids));
 
     %MODE 1: KKS TYPE LOCAL EQUILIBRIUM WITH E AND P FIXED
     if strcmpi(mode,'LE')
-        mm                         = iter_LE(kk);
-        [c_loc,mu_loc,chi_loc,diag_loc] = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
+        mm                              = iter_LE(kk_LE);
+        [c_loc,mu_loc,chi_loc,diag_loc] = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa_LE,mm]);
     %MODE 2: GRAND POTENTIAL METHOD WITH FIXED P AND MU_E
     elseif strcmpi(mode,'GP')
+
+        %Use LE whenever only one thermodynamic phase is active.
+        %GP is only used for true mixed active sets.
         if k == 1
-            mm                     = iter_LE(kk);
-            [c_loc,mu_loc,chi_loc,diag_loc] = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa,mm]);
+
+            mm                              = iter_LE(kk_LE);
+            [c_loc,mu_loc,chi_loc,diag_loc] = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa_LE,mm]);
+
         else
-            mm                     = iter_GP(kk);
-            mu_loc                 = SliceCellIds(mu_e,ids);
-            [c_loc,chi_loc]        = GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa,mm);
+
+            mm                              = iter_GP(kk_GP);
+            mu_loc                          = SliceCellIds(mu_e,ids);
+            [c_loc,chi_loc,diag_loc]        = GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa_GP,mm,PARAM);
+
         end
     else
         error('LE_Run_Mode: unknown LE_mode "%s".',mode)
@@ -182,6 +222,20 @@ E           = PackCell(E,ny);
 mu_e        = PackCell(mu_e,ny);
 chi         = PackChi(chi,ny);
 
+%Optional closure under-relaxation for mu_e. This reduces timestep collapse
+%from one very stiff local LE/GP update.
+mu_relax = 1.0;
+if isfield(PARAM,'LE_mu_relax'), mu_relax = PARAM.LE_mu_relax; end
+mu_relax = min(max(mu_relax,0),1);
+
+if mu_relax < 1
+    mu_e_old = PackCell(mu_e_old,ny);
+
+    for ie = 1:numel(mu_e)
+        mu_e{ie} = mu_e_old{ie} + mu_relax.*(mu_e{ie} - mu_e_old{ie});
+    end
+end
+
 % -------------------------------------------------------------------------
 % Raw thermodynamics for e and omega
 % -------------------------------------------------------------------------
@@ -194,6 +248,16 @@ chi         = PackChi(chi,ny);
 e_out       = Calc_e(MODEL.pars,c_out);
 omg_raw     = CalcOmegaLocal(MODEL.pars,c_grain,e_out,mu_e,ny,nx,Ne,numel(c_out));
 omg         = omg_raw;
+
+%Optional closure under-relaxation for omega, which is the direct AC driving
+%force. STATE.omg_raw is kept as the unrelaxed raw thermodynamic value.
+omg_relax = 1.0;
+if isfield(PARAM,'LE_omg_relax'), omg_relax = PARAM.LE_omg_relax; end
+omg_relax = min(max(omg_relax,0),1);
+
+if omg_relax < 1 && ~isempty(omg_old) && isequal(size(omg_old),size(omg_raw))
+    omg = omg_old + omg_relax.*(omg_raw - omg_old);
+end
 
 % -------------------------------------------------------------------------
 % Save LE state memory
@@ -214,6 +278,10 @@ LE_state.p_on            = p_on;
 LE_state.p_off           = p_off;
 LE_state.Pmax            = Pmax;
 LE_state.diag            = LE_diag;
+LE_state.alpha_LE        = alpha_LE;
+LE_state.alpha_GP        = alpha_GP;
+if isfield(PARAM,'LE_mu_relax'),      LE_state.mu_relax      = PARAM.LE_mu_relax;      end
+if isfield(PARAM,'LE_omg_relax'),     LE_state.omg_relax     = PARAM.LE_omg_relax;     end
 if isfield(PARAM,'LE_c_write_pmin'),  LE_state.c_write_pmin  = PARAM.LE_c_write_pmin;  end
 if isfield(PARAM,'LE_c_full_pmin'),   LE_state.c_full_pmin   = PARAM.LE_c_full_pmin;   end
 if isfield(PARAM,'LE_c_write_dcmax'), LE_state.c_write_dcmax = PARAM.LE_c_write_dcmax; end
@@ -739,6 +807,16 @@ end
 %Normalized active p for diagnostics only
 p_le = p_abs.*reshape(active,1,N,Np);
 p_le = p_le./max(sum(p_le,3),eps);
+end
+
+
+function p_le = RebuildPLeFromActive(p,active,p_tail,p_full)
+%REBUILDPLEFROMACTIVE Rebuild diagnostic active thermodynamic p.
+N      = size(p,2);
+Np     = size(p,3);
+p_abs  = CalcThermoWeight_Tail(p,p_tail,p_full);
+p_le   = p_abs.*reshape(active,1,N,Np);
+p_le   = p_le./max(sum(p_le,3),eps);
 end
 
 

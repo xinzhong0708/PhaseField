@@ -88,9 +88,9 @@ elseif isvector(Mraw)
 
     Mraw = Mraw(:);
 
-    if numel(Mraw) ~= Nphase
-        error('Compute_M_And_L: vector PHYS.M_phs must have length Nphase.')
-    end
+    % if numel(Mraw) ~= Nphase
+    %     error('Compute_M_And_L: vector PHYS.M_phs must have length Nphase.')
+    % end
 
     M_phase_elem = repmat(Mraw,1,Ne);
 
