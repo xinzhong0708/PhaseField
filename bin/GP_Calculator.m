@@ -36,6 +36,12 @@ obj_stop    = 1e-8;
 dc_cap      = inf;
 verbose     = 0;
 
+%Artificial bounds for independent composition variables.
+%Trials that hit/exceed these bounds are rejected instead of accepted.
+c_min       = -1.0;
+c_max       =  1.0;
+c_bound_margin = 1e-12;
+
 % Stable defaults. These are only used when the caller did not set them.
 % Do not overwrite PARAM values coming from metadata or Run_2D.
 if ~isfield(PARAM,'use_CS_chi'),       PARAM.use_CS_chi       = 1;       end
@@ -59,6 +65,11 @@ if isfield(PARAM,'GP_obj_tol'),      obj_tol  = PARAM.GP_obj_tol;      end
 if isfield(PARAM,'GP_obj_stop'),     obj_stop = PARAM.GP_obj_stop;     end
 if isfield(PARAM,'GP_dc_cap'),       dc_cap   = PARAM.GP_dc_cap;       end
 if isfield(PARAM,'GP_verbose'),      verbose  = PARAM.GP_verbose;      end
+if isfield(PARAM,'GP_c_bound_margin')
+    c_bound_margin = PARAM.GP_c_bound_margin;
+elseif isfield(PARAM,'LE_c_bound_margin')
+    c_bound_margin = PARAM.LE_c_bound_margin;
+end
 
 c_tol   = max(c_tol,0);
 wmu     = max(wmu,0);
@@ -79,6 +90,7 @@ DIAG.alpha_stage   = alpha;
 DIAG.n_iter        = 0;
 DIAG.max_dc        = 0;
 DIAG.max_cchg      = 0;
+DIAG.bound_hits    = 0;
 DIAG.iter          = 0;
 DIAG.max_step      = inf;
 DIAG.max_F_old     = inf;
@@ -89,6 +101,7 @@ DIAG.return_CS_chi = isfield(PARAM,'GP_return_CS_chi') && PARAM.GP_return_CS_chi
 
 converged   = false;
 line_failed = false;
+bound_hits  = 0;
 
 % ------------------------------------------------------------
 % Iteration
@@ -136,8 +149,15 @@ for it = 1:Miter
 
     for ils = 1:MaxLS
 
-        c_try = AddStep(c,dc,alpha_try);
+        c_try_raw = AddStep(c,dc,alpha_try);
+        bound_bad = BoundHitNode_Local(pars,c_try_raw,c_min,c_max,c_bound_margin);
+        bound_hits = bound_hits + nnz((~good_node) & bound_bad);
+
+        %Bound only for safe objective evaluation. Bound-hit nodes are
+        %assigned F = inf below and therefore cannot be accepted.
+        c_try = BoundC_Local(c_try_raw,c_min,c_max);
         F_try = GP_Objective(pars,p,c_try,mu_e,E_in,eta,wmu);
+        F_try(bound_bad) = inf;
 
         good = isfinite(F_try) & (F_try <= F_old + obj_tol.*max(1,abs(F_old)));
 
@@ -156,7 +176,31 @@ for it = 1:Miter
 
     % Accept only nodes with decreasing raw fixed-mu residual objective.
     if any(good_node)
-        c = AddStep(c,dc,alpha_acc);
+
+        %Safety: reject accepted nodes if the final accepted trial still
+        %hits/exceeds the artificial composition bounds.
+        c_new_raw = AddStep(c,dc,alpha_acc);
+        bound_bad_acc = BoundHitNode_Local(pars,c_new_raw,c_min,c_max,c_bound_margin) & (alpha_acc > 0);
+
+        if any(bound_bad_acc)
+            alpha_acc(bound_bad_acc) = 0;
+            good_node(bound_bad_acc) = false;
+            bound_hits = bound_hits + nnz(bound_bad_acc);
+        end
+
+        if any(alpha_acc > 0)
+            c = AddStep(c,dc,alpha_acc);
+            c = BoundC_Local(c,c_min,c_max);
+        else
+            line_failed = true;
+
+            if verbose == 1
+                disp('GP line search failed because all accepted nodes hit composition bounds...')
+            end
+
+            break
+        end
+
     else
         line_failed = true;
 
@@ -198,11 +242,22 @@ DIAG.converged   = converged;
 DIAG.line_failed = line_failed;
 DIAG.failed      = line_failed;
 DIAG.max_cchg    = DIAG.max_step;
+DIAG.bound_hits  = bound_hits;
 
 if line_failed
-    DIAG.message = 'GP line search failed';
+    if bound_hits > 0
+        DIAG.message = sprintf('GP line search failed after rejecting %d bound-hit trial nodes',bound_hits);
+    else
+        DIAG.message = 'GP line search failed';
+    end
 elseif ~converged
-    DIAG.message = 'GP reached Miter with safeguarded accepted iterates';
+    if bound_hits > 0
+        DIAG.message = sprintf('GP reached Miter with safeguarded accepted iterates; rejected %d bound-hit trial nodes',bound_hits);
+    else
+        DIAG.message = 'GP reached Miter with safeguarded accepted iterates';
+    end
+elseif bound_hits > 0
+    DIAG.message = sprintf('GP converged after rejecting %d bound-hit trial nodes',bound_hits);
 end
 
 % ------------------------------------------------------------
@@ -649,3 +704,58 @@ for i = 1:numel(fields)
 end
 
 end
+
+
+function c = BoundC_Local(c,c_min,c_max)
+
+for ip = 1:numel(c)
+    for ic = 1:numel(c{ip})
+        A = c{ip}{ic};
+        A(~isfinite(A)) = 0;
+        A = min(max(A,c_min),c_max);
+        c{ip}{ic} = A;
+    end
+end
+
+end
+
+
+function hit = BoundHitNode_Local(pars,c,c_min,c_max,margin)
+
+N   = numel(c{1}{1});
+hit = false(1,N);
+
+for ip = 1:numel(c)
+
+    % Pure/no-DOF phases may have c = 1 by construction.
+    % Only phases with real composition DOF are tested.
+    if ~HasCompositionDof_Local(pars{ip})
+        continue
+    end
+
+    for ic = 1:numel(c{ip})
+
+        A = reshape(c{ip}{ic},1,[]);
+
+        hit = hit | ~isfinite(A);
+        hit = hit | (A <= c_min + margin);
+        hit = hit | (A >= c_max - margin);
+
+    end
+end
+
+end
+
+
+function tf = HasCompositionDof_Local(pars)
+
+tf = true;
+
+if isfield(pars,'g0')
+    if numel(pars.g0) <= 1
+        tf = false;
+    end
+end
+
+end
+

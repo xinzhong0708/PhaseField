@@ -379,8 +379,8 @@ if ~isempty(tok)
     domg(~coexist) = NaN;
 
     Plot_Field(GRID,domg)
-    title(sprintf('\\omega_{%s} - \\omega_{%s}, coexist p > %.0e', ...
-        phs_name{iph1},phs_name{iph2},omg_p_cut))
+    title(sprintf('\\omega_{%s} - \\omega_{%s}', ...
+        phs_name{iph1},phs_name{iph2}))
     return
 
 end

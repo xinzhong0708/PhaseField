@@ -16,13 +16,11 @@ if isfield(PARAM,'LE_mode')
 end
 
 %p mode on and off
-%These thresholds control thermodynamic phase activation for LE. They can be
-%lower than before because low-p c is no longer written back abruptly.
-sc         =  0.01;
-p_tail     =  sc*1e-2;
-p_full     =  sc*1e-1;
-p_on       =  sc*5e-2;
-p_off      =  sc*2e-2;
+sc              = 10;
+PARAM.LE_p_tail = sc*1e-6;
+PARAM.LE_p_full = sc*2e-4;
+PARAM.LE_p_on   = sc*1e-5;
+PARAM.LE_p_off  = sc*1e-7;
 
 if isfield(PARAM,'LE_p_tail'), p_tail = PARAM.LE_p_tail; end
 if isfield(PARAM,'LE_p_full'), p_full = PARAM.LE_p_full; end
@@ -34,16 +32,25 @@ Pmax       =  3;
 if isfield(PARAM,'LE_Pmax'), Pmax = PARAM.LE_Pmax; end
 
 %Local equilibrium parameters
-alpha_LE   = [0.6 0.4 0.3 0.2];
+alpha_LE   = [0.6 0.4 0.3  0.2 ];
 alpha_GP   = [0.2 0.1 0.05 0.02];
 
 iter_LE    = [100 100 100 100];
-iter_GP    = [80 200 300 300];
+iter_GP    = [80  200 300 300];
 
 if isfield(PARAM,'LE_alpha_LE'), alpha_LE = PARAM.LE_alpha_LE; end
 if isfield(PARAM,'LE_alpha_GP'), alpha_GP = PARAM.LE_alpha_GP; end
 if isfield(PARAM,'LE_iter_LE'),  iter_LE  = PARAM.LE_iter_LE;  end
 if isfield(PARAM,'LE_iter_GP'),  iter_GP  = PARAM.LE_iter_GP;  end
+
+%Passive-tail GP closure for omega only.
+%This keeps the stable high-p active set for fixed-E LE, but still lets
+%low-p phases have a physically meaningful grand-potential driving force.
+tail_GP_omega = false;
+if isfield(PARAM,'LE_tail_GP_omega'), tail_GP_omega = PARAM.LE_tail_GP_omega == 1; end
+
+p_visible = 1e-8;
+if isfield(PARAM,'LE_p_visible'), p_visible = PARAM.LE_p_visible; end
 
 %Unpack fields and prepare the calculation
 ny         =  size(STATE.p,1);
@@ -111,31 +118,6 @@ e_grain = Calc_e(MODEL.pars,c_grain);
 
 %Find active thermodynamic phases using phase-collapsed p.
 [p_le,p_th,active] = BuildActiveSet_Tail(p_phase,LE_state_old,Pmax,p_tail,p_full,p_on,p_off);
-
-%In GP mode, do not send almost-pure nodes to GP just because a tiny tail
-%phase is kept active by hysteresis. This reduces intermittent slow LE2.
-if strcmpi(mode,'GP')
-
-    GP_mixed_tol = 1e-4;
-
-    if isfield(PARAM,'GP_mixed_tol')
-        GP_mixed_tol = PARAM.GP_mixed_tol;
-    end
-
-    p_phys = reshape(p_phase,N,Np);
-    [pmax_phys,iph_max] = max(p_phys,[],2);
-
-    pure_like = pmax_phys > 1 - GP_mixed_tol;
-
-    for ii = find(pure_like).'
-        active(ii,:) = false;
-        active(ii,iph_max(ii)) = true;
-    end
-
-    %Rebuild diagnostic p_le after active-set cleanup.
-    p_le = RebuildPLeFromActive(p_phase,active,p_tail,p_full);
-end
-
 n_active_map       = reshape(sum(active,2),ny,nx);
 
 %Group grids by identical active thermodynamic phase set
@@ -175,29 +157,23 @@ for iset = 1:size(active_sets,1)
     aa_LE = alpha_LE(kk_LE);
     aa_GP = alpha_GP(kk_GP);
 
-    diag_loc = InitLocalLEDiag(numel(ids));
-
     %MODE 1: KKS TYPE LOCAL EQUILIBRIUM WITH E AND P FIXED
     if strcmpi(mode,'LE')
-        mm                              = iter_LE(kk_LE);
-        [c_loc,mu_loc,chi_loc,diag_loc] = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa_LE,mm]);
-    %MODE 2: GRAND POTENTIAL METHOD WITH FIXED P AND MU_E
+        mm                                  = iter_LE(kk_LE);
+        [c_loc,mu_loc,chi_loc,diag_loc]     = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa_LE,mm]);
+        %MODE 2: GRAND POTENTIAL METHOD WITH FIXED P AND MU_E
     elseif strcmpi(mode,'GP')
-
         %Use LE whenever only one thermodynamic phase is active.
         %GP is only used for true mixed active sets.
         if k == 1
-
             mm                              = iter_LE(kk_LE);
             [c_loc,mu_loc,chi_loc,diag_loc] = LE_Calculator(pars_loc,p_loc,c_loc,E_loc,eta_loc,[aa_LE,mm]);
-
         else
-
             mm                              = iter_GP(kk_GP);
             mu_loc                          = SliceCellIds(mu_e,ids);
             [c_loc,chi_loc,diag_loc]        = GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa_GP,mm,PARAM);
-
         end
+
     else
         error('LE_Run_Mode: unknown LE_mode "%s".',mode)
     end
@@ -245,8 +221,23 @@ end
 % Here omega is intentionally calculated with MODEL.pars, not pars_inter.
 % Therefore W scaling, if used in LE, does not directly change the final
 % thermodynamic driving force.
+%Real state composition/e remains the safely written-back LE result.
 e_out       = Calc_e(MODEL.pars,c_out);
-omg_raw     = CalcOmegaLocal(MODEL.pars,c_grain,e_out,mu_e,ny,nx,Ne,numel(c_out));
+
+%Omega can optionally see passive low-p phases by a fixed-mu GP closure.
+%This affects only the AC driving force, not STATE.c, STATE.e, STATE.E or mu_e.
+c_omega     = c_grain;
+tail_diag   = struct('enabled',false,'n_nodes',0,'n_failed_nodes',0,'failed',false,'messages',{{}});
+
+if tail_GP_omega
+    [c_omega,tail_diag] = ApplyTailGPOmegaOnly( ...
+        c_omega,p_grain,p_phase,E,mu_e,eta,pars,PARAM, ...
+        phase_index,phase_id,active,p_visible,alpha_GP,iter_GP);
+end
+
+c_omega_out = PackC(c_omega,ny);
+e_omega     = Calc_e(MODEL.pars,c_omega_out);
+omg_raw     = CalcOmegaLocal(MODEL.pars,c_omega,e_omega,mu_e,ny,nx,Ne,numel(c_out));
 omg         = omg_raw;
 
 %Optional closure under-relaxation for omega, which is the direct AC driving
@@ -278,6 +269,7 @@ LE_state.p_on            = p_on;
 LE_state.p_off           = p_off;
 LE_state.Pmax            = Pmax;
 LE_state.diag            = LE_diag;
+LE_state.tail_GP_omega   = tail_diag;
 LE_state.alpha_LE        = alpha_LE;
 LE_state.alpha_GP        = alpha_GP;
 if isfield(PARAM,'LE_mu_relax'),      LE_state.mu_relax      = PARAM.LE_mu_relax;      end
@@ -323,18 +315,6 @@ diag.min_alpha_stage = inf;
 diag.messages = {};
 end
 
-
-function diag = InitLocalLEDiag(n_nodes)
-diag = struct();
-diag.converged = true;
-diag.failed = false;
-diag.n_nodes = n_nodes;
-diag.alpha_stage = NaN;
-diag.n_iter = 0;
-diag.max_dc = 0;
-diag.max_cchg = 0;
-diag.message = '';
-end
 
 
 function diag = AccumulateLEDiag(diag,diag_loc,ids,iset)
@@ -639,6 +619,198 @@ eta_loc = eta(ids);
 end
 
 
+
+% =========================================================================
+% Passive-tail GP closure for omega only
+% =========================================================================
+function [c_omega,tail_diag] = ApplyTailGPOmegaOnly( ...
+    c_omega,p_grain,p_phase,E,mu_e,eta,pars_phase,PARAM, ...
+    phase_index,phase_id,active,p_visible,alpha_GP,iter_GP)
+%APPLYTAILGPOMEGAONLY Update low-p omitted phase compositions only for omega.
+%
+%The fixed-E LE active set can stay conservative/high for stability. Phases
+%with p > p_visible but not in the LE active set are evaluated by fixed-mu GP
+%so their grand potential driving force is still visible to Allen-Cahn.
+%The result is written only to c_omega, not to the real conserved state c.
+
+N      = size(p_phase,2);
+Np     = size(p_phase,3);
+Ne     = numel(mu_e);
+
+if nargin < 12 || isempty(p_visible)
+    p_visible = 1e-8;
+end
+
+p_visible = max(p_visible,0);
+
+if isfield(PARAM,'LE_tail_GP_alpha') && ~isempty(PARAM.LE_tail_GP_alpha)
+    aa = PARAM.LE_tail_GP_alpha;
+else
+    aa = alpha_GP(1);
+end
+
+if isfield(PARAM,'LE_tail_GP_iter') && ~isempty(PARAM.LE_tail_GP_iter)
+    mm = PARAM.LE_tail_GP_iter;
+else
+    mm = iter_GP(1);
+end
+
+p_fullw = max(10*p_visible,p_visible+eps);
+if isfield(PARAM,'LE_tail_GP_p_full') && ~isempty(PARAM.LE_tail_GP_p_full)
+    p_fullw = max(PARAM.LE_tail_GP_p_full,p_visible+eps);
+end
+
+dcmax = inf;
+if isfield(PARAM,'LE_tail_GP_dcmax') && ~isempty(PARAM.LE_tail_GP_dcmax)
+    dcmax = PARAM.LE_tail_GP_dcmax;
+end
+
+tail_diag = struct();
+tail_diag.enabled        = true;
+tail_diag.p_visible      = p_visible;
+tail_diag.p_full         = p_fullw;
+tail_diag.n_nodes        = 0;
+tail_diag.n_failed_nodes = 0;
+tail_diag.failed         = false;
+tail_diag.messages       = {};
+
+for iph = 1:Np
+
+    pcur = reshape(p_phase(:,:,iph),1,[]);
+    ids  = find((pcur > p_visible) & ~active(:,iph).');
+
+    if isempty(ids)
+        continue
+    end
+
+    [pars_loc,c_loc,p_loc] = BuildTailGPLocal(pars_phase,c_omega,p_grain,phase_index,phase_id,iph,ids);
+
+    E_loc   = SliceCellIds(E,ids);
+    mu_loc  = SliceCellIds(mu_e,ids);
+    eta_loc = eta(ids);
+    try
+        [c_loc,~,diag_loc] = GP_Calculator(pars_loc,p_loc,c_loc,mu_loc,E_loc,eta_loc,aa,mm,PARAM);
+    catch ME
+        tail_diag.failed = true;
+        tail_diag.n_failed_nodes = tail_diag.n_failed_nodes + numel(ids);
+        tail_diag.messages{end+1} = ME.message;
+        continue
+    end
+
+    if isfield(diag_loc,'failed') && diag_loc.failed
+        tail_diag.failed = true;
+        tail_diag.n_failed_nodes = tail_diag.n_failed_nodes + numel(ids);
+        if isfield(diag_loc,'message') && ~isempty(diag_loc.message)
+            tail_diag.messages{end+1} = diag_loc.message;
+        end
+    end
+
+    c_omega = AssignTailCToGrainsOmega(c_omega,p_grain,phase_index,phase_id,iph,ids,c_loc,p_visible,p_fullw,dcmax);
+
+    tail_diag.n_nodes = tail_diag.n_nodes + numel(ids);
+
+end
+
+end
+
+
+function [pars_loc,c_loc,p_loc] = BuildTailGPLocal(pars_phase,c_grain,p_grain,phase_index,phase_id,iph,ids)
+%BUILDTAILGPLOCAL Build a one-phase fixed-mu GP local block.
+
+Nloc = numel(ids);
+pid  = phase_id(iph);
+
+grains = find(phase_index == pid);
+ig0    = grains(1);
+
+pars_loc = cell(1,1);
+pars_loc{1} = pars_phase{iph};
+
+Nc    = numel(c_grain{ig0});
+c_loc = cell(1,1);
+c_loc{1} = cell(1,Nc);
+
+p_sum = zeros(1,Nloc);
+
+for ig = grains
+    pg = reshape(p_grain(:,:,ig),1,[]);
+    p_sum = p_sum + pg(ids);
+end
+
+p_loc = zeros(1,Nloc,1);
+p_loc(1,:,1) = p_sum;
+
+good = p_sum > eps;
+
+for ic = 1:Nc
+
+    num = zeros(1,Nloc);
+
+    for ig = grains
+        pg = reshape(p_grain(:,:,ig),1,[]);
+        cg = reshape(c_grain{ig}{ic},1,[]);
+        num = num + pg(ids).*cg(ids);
+    end
+
+    cg0 = reshape(c_grain{ig0}{ic},1,[]);
+    tmp = cg0(ids);
+
+    tmp(good) = num(good)./p_sum(good);
+
+    c_loc{1}{ic} = tmp;
+
+end
+
+end
+
+
+function c_omega = AssignTailCToGrainsOmega(c_omega,p_grain,phase_index,phase_id,iph,ids,c_loc,p_write,p_fullw,dcmax)
+%ASSIGNTAILCTOGRAINSOMEGA Write tail GP composition only to c_omega.
+
+pid    = phase_id(iph);
+grains = find(phase_index == pid);
+
+p_write = max(p_write,0);
+p_fullw = max(p_fullw,p_write+eps);
+
+for ig = grains
+
+    pg = reshape(p_grain(:,:,ig),1,[]);
+    pp = pg(ids);
+
+    w  = (pp - p_write)./(p_fullw - p_write);
+    w  = min(max(w,0),1);
+    w  = w.^2.*(3 - 2*w);
+
+    take = w > 0;
+
+    if ~any(take)
+        continue
+    end
+
+    id_take = ids(take);
+    ww      = w(take);
+
+    for ic = 1:numel(c_omega{ig})
+
+        A = reshape(c_omega{ig}{ic},1,[]);
+        B = reshape(c_loc{1}{ic},1,[]);
+
+        dA = B(take) - A(id_take);
+
+        if isfinite(dcmax) && dcmax > 0
+            dA = min(max(dA,-dcmax),dcmax);
+        end
+
+        A(id_take) = A(id_take) + ww.*dA;
+        c_omega{ig}{ic} = A;
+
+    end
+end
+
+end
+
+
 % =========================================================================
 % Assign local phase c back to grain-resolved storage
 % =========================================================================
@@ -807,16 +979,6 @@ end
 %Normalized active p for diagnostics only
 p_le = p_abs.*reshape(active,1,N,Np);
 p_le = p_le./max(sum(p_le,3),eps);
-end
-
-
-function p_le = RebuildPLeFromActive(p,active,p_tail,p_full)
-%REBUILDPLEFROMACTIVE Rebuild diagnostic active thermodynamic p.
-N      = size(p,2);
-Np     = size(p,3);
-p_abs  = CalcThermoWeight_Tail(p,p_tail,p_full);
-p_le   = p_abs.*reshape(active,1,N,Np);
-p_le   = p_le./max(sum(p_le,3),eps);
 end
 
 

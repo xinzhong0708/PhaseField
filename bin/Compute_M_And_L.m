@@ -10,9 +10,25 @@ function PARAM = Compute_M_And_L(STATE,PARAM,MODEL,PHYS)
 %   PARAM.Lm         PARAM.L * PHYS.m
 %   PARAM.LK         PARAM.L * PHYS.kap
 %
+% Mobility rule:
+%
+%   M = sum_i p_i M_i / sum_i p_i
+%
+% No log average.
+% No harmonic average.
+% No interface CH mobility floor.
+% No artificial widening of low-M regions.
+%
 % PARAM.M is used by the CH solver.
-% The mobility used to compute L can be floored locally so that very slow
-% diffusion inside one phase does not freeze the phase interface.
+% The mobility used to compute L can optionally be floored through
+% PARAM.M_L_floor_fac, but by default it is zero.
+PARAM.M_weight_mode = 'smoothstep';
+M_weight_mode       = 'smoothstep';
+PARAM.M_weight_mode = 'quintic';
+if isfield(PARAM,'M_weight_mode')
+    M_weight_mode = PARAM.M_weight_mode;
+end
+
 
 [ny,nx,~] = size(STATE.p);
 
@@ -88,11 +104,19 @@ elseif isvector(Mraw)
 
     Mraw = Mraw(:);
 
-    % if numel(Mraw) ~= Nphase
-    %     error('Compute_M_And_L: vector PHYS.M_phs must have length Nphase.')
-    % end
+    if numel(Mraw) == Nphase
 
-    M_phase_elem = repmat(Mraw,1,Ne);
+        M_phase_elem = repmat(Mraw,1,Ne);
+
+    elseif numel(Mraw) == Ne
+
+        M_phase_elem = repmat(Mraw(:).',Nphase,1);
+
+    else
+
+        error('Compute_M_And_L: vector PHYS.M_phs must have length Nphase or Ne.')
+
+    end
 
 else
 
@@ -108,10 +132,12 @@ else
 
     else
 
-        error('Compute_M_And_L: PHYS.M_phs must be scalar, Nphase x Ne, or Ne x Nphase.')
+        error('Compute_M_And_L: PHYS.M_phs must be scalar, Nphase x Ne, Ne x Nphase, length Nphase, or length Ne.')
 
     end
 end
+
+M_phase_elem = max(M_phase_elem,M_min);
 
 % ------------------------------------------------------------
 % Collapse grain p to phase p
@@ -127,9 +153,41 @@ for iph = 1:Nphase
     end
 end
 
-psum = sum(p_phase,3);
+% ------------------------------------------------------------
+% Mobility interpolation weight
+%
+% linear:
+%   w = p
+%
+% smoothstep:
+%   w = p^2*(3 - 2p)
+% This keeps pure phases insensitive to tiny numerical phase tails.
+% ------------------------------------------------------------
+switch lower(M_weight_mode)
 
-% Interface mask from phase mixing
+    case 'linear'
+
+        p_mob = p_phase;
+
+    case 'smoothstep'
+
+        p_mob = p_phase.^2 .* (3 - 2*p_phase);
+
+    case 'quintic'
+
+        p_mob = p_phase.^3 .* (10 - 15*p_phase + 6*p_phase.^2);
+
+    otherwise
+
+        error('Compute_M_And_L: unknown PARAM.M_weight_mode "%s".',M_weight_mode)
+
+end
+
+psum     = sum(p_phase,3);
+psum_mob = sum(p_mob,3);
+
+% Interface mask from phase mixing.
+% This affects only the optional L floor, not PARAM.M.
 interface_mask = (1 - sum(p_phase.^2,3)) > M_L_p_cut;
 
 % ------------------------------------------------------------
@@ -143,6 +201,8 @@ for ie = 1:Ne
     end
 end
 
+PARAM.M_diag = cell(1,Ne);
+
 % ------------------------------------------------------------
 % Build PARAM.M and compute zeta for L
 % ------------------------------------------------------------
@@ -150,22 +210,49 @@ zeta = zeros(ny,nx);
 
 for ie = 1:Ne
 
+    % --------------------------------------------------------
+    % Honest linear p-weighted mobility
+    % --------------------------------------------------------
     Mgrid = zeros(ny,nx);
+
     for iph = 1:Nphase
-        Mgrid = Mgrid + M_phase_elem(iph,ie).*p_phase(:,:,iph);
+        Mgrid = Mgrid + M_phase_elem(iph,ie).*p_mob(:,:,iph);
     end
 
-    mask = psum > eps;
+    mask = psum_mob > eps;
+
     Mtmp = Mgrid;
-    Mtmp(mask)  = Mgrid(mask)./psum(mask);
+    Mtmp(mask)  = Mgrid(mask)./psum_mob(mask);
     Mtmp(~mask) = mean(M_phase_elem(:,ie));
 
-    % True CH diffusion mobility
-    PARAM.M{ie,ie} = Mtmp;
+    Mtmp = max(Mtmp,M_min);
 
+    % True CH diffusion mobility
+    PARAM.M{ie,ie}   = Mtmp;
+    PARAM.M_diag{ie} = Mtmp;
+
+    % --------------------------------------------------------
     % Mobility used only to compute L
-    Mtmp_L  = Mtmp;
-    M_floor = PHYS.M0*M_L_floor_fac(ie);
+    % --------------------------------------------------------
+    Mtmp_L = Mtmp;
+
+    if isfield(PHYS,'M0') && ~isempty(PHYS.M0)
+
+        if isscalar(PHYS.M0)
+            Mref = PHYS.M0;
+        elseif numel(PHYS.M0) == Ne
+            Mref = PHYS.M0(ie);
+        else
+            Mref = mean(M_phase_elem(:,ie));
+        end
+
+    else
+
+        Mref = mean(M_phase_elem(:,ie));
+
+    end
+
+    M_floor = Mref*M_L_floor_fac(ie);
 
     if M_floor > 0
 
@@ -188,8 +275,21 @@ end
 % ------------------------------------------------------------
 zeta = max(zeta,z_min);
 
-PARAM.L  = L_fac * 4*PHYS.m ./ (3*kap*zeta);
-PARAM.Lm = PARAM.L * PHYS.m;
-PARAM.LK = PARAM.L * kap;
+PARAM.L  = L_fac * 4*PHYS.m ./ (3*kap.*zeta);
+PARAM.Lm = PARAM.L .* PHYS.m;
+PARAM.LK = PARAM.L .* kap;
+
+PARAM.L(:)  = mean(PARAM.L( :));
+PARAM.Lm(:) = mean(PARAM.Lm(:));
+PARAM.LK(:) = mean(PARAM.LK(:));
+
+% ------------------------------------------------------------
+% Diagnostics
+% ------------------------------------------------------------
+PARAM.M_phase              = p_phase;
+PARAM.M_phase_elem         = M_phase_elem;
+PARAM.M_L_floor_fac        = M_L_floor_fac;
+PARAM.M_L_interface_only   = M_L_interface_only;
+PARAM.M_L_p_cut            = M_L_p_cut;
 
 end
