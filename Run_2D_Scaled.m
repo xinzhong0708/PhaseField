@@ -14,8 +14,10 @@ load(map_file)
 %DISPLAY ELEMENT
 disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  mean(STATE.E{4},'all')])
 
-%CLEAR
-% NUM.dt_phy    =  5e4;
+% load 1400
+% NUM.dt_phy = NUM.dt_phy/2;
+% NUM.dE_target = 0.01;
+% NUM.dp_target = 0.01;
 
 for it = 1:2e4
 
@@ -37,7 +39,7 @@ for it = 1:2e4
     PARAM.eta            =    Eta_Damping_SmoothHalo(p_eta, PHYS.eta, NUM.int_damp*PHYS.eta, 4, 3e-3, 4, 3e-3, NUM.int_damp*PHYS.eta, 3, NUM.int_damp*PHYS.eta,1e-3);
     
     % W scaling
-    PARAM                =    Calc_Kappa_WScale_InterfaceRamp(STATE_OLD,PARAM,MODEL,PHYS,NUM);
+    PARAM                =    Calc_Kappa_WScale_InterfaceRamp(STATE_OLD,PARAM,MODEL,PHYS);
     
 
     % FIRST LOCAL EQUILIBRIUM
@@ -55,6 +57,7 @@ for it = 1:2e4
     % Full AC + CH COUPLED PREDICTOR
     [STATE_RAW,DIAG_RAW] =    PF_Coupled_ACCH_LETangent_CS_offdiagM(STATE_OLD,PARAM,MODEL,GRID,PHYS,NUM);
     t_ACCH               =    toc(t);
+    STATE_RAW            =    Snap_PureP(STATE_RAW,PARAM,MODEL);
 
     % EXTEND PHASE
     STATE_RAW            =    Extend_AbsentPhaseC_Rim(STATE_RAW,PARAM);
@@ -78,9 +81,9 @@ for it = 1:2e4
     t_LE3                =    toc(t);
     STATE_TRIAL.CHLE_diag=    DIAG_CHLE;
 
-
-    STATE_TRIAL          =    Horizon_Ave(STATE_TRIAL,MODEL);
-    STATE                =    Horizon_Ave(STATE      ,MODEL);
+    % MAKE HORIZONTAL OPTION
+    % STATE_TRIAL          =    Horizon_Ave(STATE_TRIAL,MODEL);
+    % STATE                =    Horizon_Ave(STATE      ,MODEL);
 
     
     % TIME STEP UPDATE
@@ -104,15 +107,16 @@ for it = 1:2e4
     end
 
     if mod(it,10)==0
-        disp(PHASE(end,:))
-        disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  mean(STATE.E{4},'all')])
+        % disp(PHASE(end,:))
         PF_Plot([3,3,1],'E3',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,4],'Phase2d',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,5],'omg34',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        PF_Plot([3,3,6],'c31',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
-        subplot(337);plot(GRID.x,STATE.p(2,:,2),'.-',GRID.x,STATE.p(2,:,3),'.-',GRID.x,STATE.p(2,:,4),'.-',GRID.x,STATE.p(2,:,5),'.-')
+        % subplot(334);plot(GRID.x,STATE.chi{3,3}(2,:),'.-')
+        PF_Plot([3,3,5],'omg12',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        % PF_Plot([3,3,6],'c31',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        PF_Plot([3,3,6],'omg23',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
+        subplot(337);plot(GRID.x,STATE.p(2,:,2),'.-',GRID.x,STATE.p(2,:,3),'.-',GRID.x,STATE.p(2,:,4),'.-',GRID.x,STATE.p(2,:,5),'.-',GRID.x,STATE.p(2,:,6),'.-',GRID.x,STATE.p(2,:,7),'.-',GRID.x,STATE.p(2,:,8),'.-')
         subplot(338);plot(GRID.x,STATE.E{1}(2,:), GRID.x,STATE.E{2}(2,:)  , GRID.x,STATE.E{3}(2,:))
         subplot(339);plot(TIME,PHASE(:,:))
         drawnow
@@ -132,5 +136,64 @@ for it = 1:2e4
     % end
 
 end
+
+
+
+
+
+
+function STATE = Snap_PureP(STATE,PARAM,MODEL)
+%SNAP_PUREP Snap nearly pure p to exactly pure and remove tiny p tails.
+
+p_cut  = 1 - 1e-7;
+p_zero = 1e-7;
+
+if isfield(PARAM,'p_snap_cut')
+    p_cut = PARAM.p_snap_cut;
+end
+
+if isfield(PARAM,'p_zero_cut')
+    p_zero = PARAM.p_zero_cut;
+end
+
+STATE.p = Calc_p(MODEL,STATE.phi);
+
+[pmax,idmax] = max(STATE.p,[],3);
+mask_pure = pmax > p_cut;
+
+% Snap nearly pure grids to exactly one grain
+for ig = 1:size(STATE.phi,3)
+    A = STATE.phi(:,:,ig);
+    A(mask_pure & idmax ~= ig) = 0;
+    A(mask_pure & idmax == ig) = 1;
+    STATE.phi(:,:,ig) = A;
+end
+
+% Recompute p after pure snapping
+STATE.p = Calc_p(MODEL,STATE.phi);
+
+% Remove tiny p tails
+mask_zero = STATE.p < p_zero;
+
+for ig = 1:size(STATE.phi,3)
+    A = STATE.phi(:,:,ig);
+    A(mask_zero(:,:,ig)) = 0;
+    STATE.phi(:,:,ig) = A;
+end
+
+% Renormalize phi where needed
+s = sqrt(sum(STATE.phi.^2,3));
+mask = s > 1e-30;
+
+for ig = 1:size(STATE.phi,3)
+    A = STATE.phi(:,:,ig);
+    A(mask) = A(mask)./s(mask);
+    STATE.phi(:,:,ig) = A;
+end
+
+STATE.p = Calc_p(MODEL,STATE.phi);
+
+end
+
 
 

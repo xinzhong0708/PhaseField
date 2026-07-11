@@ -10,12 +10,12 @@ sync_PT_from_metadata = true;
 % load 1500
 % phase         = [interp1(TIME,PHASE(:,1),NUM.t_phy) interp1(TIME,PHASE(:,2),NUM.t_phy) interp1(TIME,PHASE(:,3),NUM.t_phy) interp1(TIME,PHASE(:,4),NUM.t_phy)];
 % [Tcur,Pcur]   =  PT_Path(NUM.t_phy,PARAM.PT);
-T             =  673;
+T             =  873;
 P             =  3e8;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'       'Ca'       'Al'     'Si'    'O'};
-Nsys          = [ 0.0897    0.0960    0.0574    0.1840];
+Nsys          = [ 0.1415    0.1087    0.0096    0.1516];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 % Choose phases considered in Gibbs minimization.  Keep the order consistent

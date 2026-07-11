@@ -1,11 +1,11 @@
 clear
 addpath ./ ./bin ./Thermo ./Thermo/Utilities ./Thermo/Solutions ./Thermo/EOS ./Thermo/glpkmex
 
-T        = 773;
+T        = 673;
 P        = 3e8;
-phs_name = {'Orthopyroxene','Clinopyroxene','Garnet','Kyanite','Quartz'};
+phs_name = {'Clinopyroxene','Orthopyroxene','Garnet','Kyanite','Quartz'};
 
-Nsys     = [ 0.1058    0.1550    0.0128    0.1228];
+Nsys     = [ 0.1142    0.1086    0.0527    0.1556];
 
 options.nref       = 50;
 options.dz         = 1/4;

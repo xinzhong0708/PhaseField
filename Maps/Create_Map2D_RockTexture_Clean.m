@@ -15,29 +15,30 @@ addpath('..\Thermo')
 addpath('..\Thermo\Solutions')
 
 %% User controls
-T      = 450 + 273.15;
+T      = 673;
 P      = 0.3e9;
 Cname  = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 solmod = 'solution_models_PFM';
 
-phs_name = {'Clinopyroxene','Garnet','Kyanite','Quartz'};
+phs_name = {'Garnet','Orthopyroxene','Kyanite','Quartz'};
 
-phase_prop = [0.45 0.007 0.25 0.15];
+phase_prop = [0.05 0.45 0.25 0.15];
 phase_prop = phase_prop/sum(phase_prop);
 
 c_value    = cell(1,numel(phs_name));
-c_value{1} = [0.05 0.15 0 0.4];
-c_value{2} = [0.45 0.45];
-c_value{3} = [1.0];
-c_value{4} = [1.0];
+c_value{1} = [0.50  0.45]; 
+c_value{2} = [0.25  0.35  0.25  0.05];         
+c_value{3} = [1];         
+c_value{4} = [1];         
 
-Lx = 25e-6;
-Ly = 25e-6;
-nx = 80;
-ny = 80;
+
+Lx = 500e-6;
+Ly = 500e-6;
+nx = 100;
+ny = 100;
 
 % Larger grain_size gives fewer cleaner grains.
-grain_size   = 15e-6;
+grain_size   = 100e-6;
 Ngrain_user  = [];
 rng_seed     = 6;
 periodic_map = 0;
@@ -74,7 +75,7 @@ PHYS.vref = 2e-5;
 E_sc = PHYS.E_sc;
 L_sc = PHYS.L_sc;
 vref = PHYS.vref;
-eta0 = 6000e10/E_sc;
+eta0 = 5000e10/E_sc;
 
 %% Grid
 x  = linspace(0,Lx,nx)/L_sc;

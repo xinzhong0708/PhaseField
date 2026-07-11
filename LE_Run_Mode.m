@@ -16,7 +16,7 @@ if isfield(PARAM,'LE_mode')
 end
 
 %p mode on and off
-sc              = 10;
+sc              = 1;
 PARAM.LE_p_tail = sc*1e-6;
 PARAM.LE_p_full = sc*2e-4;
 PARAM.LE_p_on   = sc*1e-5;

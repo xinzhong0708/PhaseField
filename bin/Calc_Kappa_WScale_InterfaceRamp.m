@@ -1,506 +1,353 @@
-function [PARAM] = Calc_Kappa_WScale_InterfaceRamp(STATE,PARAM,MODEL,PHYS,NUM)
-%CALC_KAPPA_WSCALE_INTERFACERAMP Coordinate kappa and excess-energy scaling.
-%
-% This function does NOT change chi directly.
-%
-% It builds:
-%   PARAM.kappa_eff      : spatial kappa map
-%   PARAM.w_scale_phase  : excess-energy scale map for LE/GP thermodynamics
-%
-% Interpretation:
-%   interface/protected layer:
-%       kappa is reduced but nonzero inside a present selected phase
-%       excess energy can be weakened for selected phases only
-%
-%   grain core:
-%       kappa is full
-%       excess energy is full
-%
-% Typical settings:
-%   PARAM.kappa_phase       = PHYS.kappa .* cellfun(@(x) size(x.n,1) > 1, MODEL.pars);
-%   PARAM.ramp_p_interface  = 0.999;
-%   PARAM.ramp_p_presence   = 1e-5;
-%   PARAM.ramp_zero_width   = 1;
-%   PARAM.ramp_width        = 4;
-%   PARAM.kappa_min_frac    = 0.02;
-%   PARAM.w_scale_min       = 0.75;
-%
-% WScale phase selection:
-%   default: damp all phases, preserving old behavior
-%
-%   PARAM.WScale_phase_name = 'Cpx';
-%   PARAM.WScale_phase_name = {'Cpx','Opx'};
-%   PARAM.WScale_phase_id   = [1 3];       % collapsed thermodynamic phase id
-%   PARAM.WScale_grain_id   = [2 5];       % original grain id
-%   PARAM.WScale_phase_mask = logical/numeric vector, length Ng or Nphase
-%
-% Optional expensive check:
-%   PARAM.WScale_auto_posdef = 1;
-%   PARAM.WScale_h_tol       = 1e-10;
-%
-% Required LE_Run_Mode_New behavior:
-%   use PARAM.w_scale_phase to set pars{iph}.w_scale after phase collapse.
-%
-% NUM is currently unused but kept in the input list for compatibility.
+function PARAM = Calc_Kappa_WScale_InterfaceRamp(STATE,PARAM,MODEL,PHYS)
+%CALC_KAPPA_WSCALE_INTERFACERAMP Build WScale and kappa_eff maps.
 
 [ny,nx,Ng] = size(STATE.p);
 
 % -------------------------------------------------------------------------
-% Defaults
+% Parameters
 % -------------------------------------------------------------------------
-p_interface    = 0.999;
-p_presence     = 1e-5;
-zero_width     = 4;
-ramp_width     = 5;
-kappa_min_frac = 0.1;
-w_scale_min    = 1;
+tail_p     = GetParam(PARAM,{'WScale_tail_p_presence','WScale_p_presence'},1e-8);
+w_dom_p    = GetParam(PARAM,{'WScale_domain_p'},0.5);
+k_dom_p    = GetParam(PARAM,{'kappa_domain_p'},w_dom_p);
+zero_w     = GetParam(PARAM,{'ramp_zero_width','kappa_zero_width'},2);
+ramp_w     = GetParam(PARAM,{'ramp_width','kappa_ramp_width'},6);
+kmin       = GetParam(PARAM,{'kappa_min_frac'},0.02);
+fill_iter  = GetParam(PARAM,{'WScale_domain_fill_iter'},2);
 
-if isfield(PARAM,'ramp_p_interface')
-    p_interface = PARAM.ramp_p_interface;
-elseif isfield(PARAM,'kappa_p_interface')
-    p_interface = PARAM.kappa_p_interface;
-end
-
-if isfield(PARAM,'ramp_p_presence')
-    p_presence = PARAM.ramp_p_presence;
-elseif isfield(PARAM,'kappa_p_presence')
-    p_presence = PARAM.kappa_p_presence;
-end
-
-if isfield(PARAM,'ramp_zero_width')
-    zero_width = PARAM.ramp_zero_width;
-elseif isfield(PARAM,'kappa_zero_width')
-    zero_width = PARAM.kappa_zero_width;
-end
-
-if isfield(PARAM,'ramp_width')
-    ramp_width = PARAM.ramp_width;
-elseif isfield(PARAM,'kappa_ramp_width')
-    ramp_width = PARAM.kappa_ramp_width;
-end
-
-if isfield(PARAM,'kappa_min_frac')
-    kappa_min_frac = PARAM.kappa_min_frac;
-end
-
-if isfield(PARAM,'w_scale_min')
-    w_scale_min = PARAM.w_scale_min;
-end
-
-zero_width     = max(0,round(zero_width));
-ramp_width     = max(1,round(ramp_width));
-kappa_min_frac = min(max(kappa_min_frac,0),1);
-w_scale_min    = min(max(w_scale_min,0),1);
+tail_p    = max(tail_p,0);
+w_dom_p   = min(max(w_dom_p,0),1);
+k_dom_p   = min(max(k_dom_p,0),1);
+zero_w    = max(0,round(zero_w));
+ramp_w    = max(1,round(ramp_w));
+kmin      = min(max(kmin,0),1);
+fill_iter = max(0,round(fill_iter));
 
 % -------------------------------------------------------------------------
 % Collapse grains to thermodynamic phases
 % -------------------------------------------------------------------------
-phase_index = MODEL.phase_index(:).';
-phase_id    = unique(phase_index,'stable');
-Nphase      = numel(phase_id);
+[phase_id,grain_to_phase,p_phase,phase_name] = CollapsePhases(STATE,MODEL);
 
-p_phase        = zeros(ny,nx,Nphase);
-grain_to_phase = zeros(1,Ng);
-
-for iph = 1:Nphase
-    grains = find(phase_index == phase_id(iph));
-    grain_to_phase(grains) = iph;
-    p_phase(:,:,iph) = sum(STATE.p(:,:,grains),3);
-end
+Nphase = numel(phase_id);
 
 % -------------------------------------------------------------------------
-% Determine phase kappa after collapse
+% Phase WScale factor
 % -------------------------------------------------------------------------
-kappa_phase = zeros(1,Nphase);
-
-if isfield(PARAM,'kappa_phase') && ~isempty(PARAM.kappa_phase)
-
-    kp_in = PARAM.kappa_phase(:).';
-
-    if numel(kp_in) == Ng
-
-        for iph = 1:Nphase
-            grains = find(grain_to_phase == iph);
-            kappa_phase(iph) = max(kp_in(grains));
-        end
-
-    elseif numel(kp_in) == Nphase
-
-        kappa_phase = kp_in;
-
-    elseif isscalar(kp_in)
-
-        kappa_phase(:) = kp_in;
-
-    else
-
-        error('PARAM.kappa_phase must be scalar, length Ng, or length Nphase.')
-
-    end
-
-elseif isfield(PARAM,'kappa_phase_name') && isfield(MODEL,'phs_name')
-
-    for iph = 1:Nphase
-        grains = find(grain_to_phase == iph);
-        ig0 = grains(1);
-
-        if strcmpi(MODEL.phs_name{ig0},PARAM.kappa_phase_name)
-            kappa_phase(iph) = PHYS.kappa;
-        end
-    end
-
+if isfield(PARAM,'WScale_phase_factor') && ~isempty(PARAM.WScale_phase_factor)
+    wmin_phase = PhaseValue(PARAM.WScale_phase_factor,phase_id, ...
+        grain_to_phase,Nphase,Ng,1,'PARAM.WScale_phase_factor');
 else
-
-    kappa_phase(:) = PHYS.kappa;
-
+    wmin_phase = ones(1,Nphase);
 end
 
+wmin_phase = min(max(wmin_phase,0),1);
+active     = wmin_phase < 1 - 1e-12;
+
 % -------------------------------------------------------------------------
-% Determine which phases receive WScale damping
+% Phase kappa value
 %
-% Default: damp all phases, preserving old behavior.
-% If any WScale selector is given, only selected phases are damped.
+% Activation is controlled only by WScale_phase_factor.
+% If PARAM.kappa_phase_value is absent, active phases use PHYS.kappa.
 % -------------------------------------------------------------------------
-wscale_active = true(1,Nphase);
-
-has_wscale_select = isfield(PARAM,'WScale_phase_name') || ...
-                    isfield(PARAM,'WScale_phase_id')   || ...
-                    isfield(PARAM,'WScale_grain_id')   || ...
-                    isfield(PARAM,'WScale_phase_mask');
-
-if has_wscale_select
-
-    wscale_active = false(1,Nphase);
-
-    % Select by phase name
-    if isfield(PARAM,'WScale_phase_name')
-
-        if ~isfield(MODEL,'phs_name')
-            error('PARAM.WScale_phase_name requires MODEL.phase_name.')
-        end
-
-        names = PARAM.WScale_phase_name;
-
-        if ischar(names) || isstring(names)
-            names = cellstr(names);
-        end
-
-        for iph = 1:Nphase
-
-            grains = find(grain_to_phase == iph);
-            ig0    = grains(1);
-
-            for iname = 1:numel(names)
-                if strcmpi(MODEL.phs_name{ig0},names{iname})
-                    wscale_active(iph) = true;
-                end
-            end
-
-        end
-    end
-
-    % Select by collapsed thermodynamic phase id
-    if isfield(PARAM,'WScale_phase_id')
-
-        ids = PARAM.WScale_phase_id(:).';
-
-        for ii = 1:numel(ids)
-            if ids(ii) >= 1 && ids(ii) <= Nphase
-                wscale_active(ids(ii)) = true;
-            end
-        end
-    end
-
-    % Select by original grain id
-    if isfield(PARAM,'WScale_grain_id')
-
-        gids = PARAM.WScale_grain_id(:).';
-
-        for ii = 1:numel(gids)
-            if gids(ii) >= 1 && gids(ii) <= Ng
-                iph = grain_to_phase(gids(ii));
-                wscale_active(iph) = true;
-            end
-        end
-    end
-
-    % Select by logical/numeric mask
-    if isfield(PARAM,'WScale_phase_mask')
-
-        mask_in = PARAM.WScale_phase_mask(:).';
-
-        if isscalar(mask_in)
-
-            wscale_active(:) = mask_in ~= 0;
-
-        elseif numel(mask_in) == Ng
-
-            for iph = 1:Nphase
-                grains = find(grain_to_phase == iph);
-                wscale_active(iph) = any(mask_in(grains) ~= 0);
-            end
-
-        elseif numel(mask_in) == Nphase
-
-            wscale_active = mask_in ~= 0;
-
-        else
-
-            error('PARAM.WScale_phase_mask must be scalar, length Ng, or length Nphase.')
-
-        end
-    end
+if isfield(PARAM,'kappa_phase_value') && ~isempty(PARAM.kappa_phase_value)
+    kappa_value = PhaseValue(PARAM.kappa_phase_value,phase_id, ...
+        grain_to_phase,Nphase,Ng,PHYS.kappa,'PARAM.kappa_phase_value');
+else
+    kappa_value = PHYS.kappa*ones(1,Nphase);
 end
 
-% -------------------------------------------------------------------------
-% Build ramp maps
-% -------------------------------------------------------------------------
-weight_raw    = zeros(ny,nx,Nphase);
-weight_kappa  = zeros(ny,nx,Nphase);
-w_scale_phase = ones(ny,nx,Nphase);
-kappa_eff     = zeros(ny,nx);
+kappa_phase = zeros(1,Nphase);
+kappa_phase(active) = kappa_value(active);
 
+% -------------------------------------------------------------------------
+% Allocate maps
+% -------------------------------------------------------------------------
+kappa_eff     = zeros(ny,nx);
+kappa_weight  = zeros(ny,nx,Nphase);
+recovery_map  = zeros(ny,nx,Nphase);
+w_scale_phase = ones(ny,nx,Nphase);
+
+w_tail_map    = false(ny,nx,Nphase);
+w_domain_mask = false(ny,nx,Nphase);
+k_domain_mask = false(ny,nx,Nphase);
+
+% -------------------------------------------------------------------------
+% Build maps
+% -------------------------------------------------------------------------
 for iph = 1:Nphase
 
     pcur = p_phase(:,:,iph);
+    wmin = wmin_phase(iph);
     kp   = kappa_phase(iph);
 
-    present = pcur > p_presence;
+    w_dom = FillSmallHolesNoWrap(pcur > w_dom_p,fill_iter);
+    k_dom = FillSmallHolesNoWrap(pcur > k_dom_p,fill_iter);
 
-    % Cells with p below p_interface define interface/outside.
-    zero_mask = pcur < p_interface;
+    recovery = BuildInsideRamp(w_dom,zero_w,ramp_w,ny,nx);
 
-    if ~any(zero_mask(:))
-
-        w_raw = ones(ny,nx);
-
-    else
-
-        max_dist = zero_width + ramp_width + 1;
-
-        dist  = inf(ny,nx);
-        known = zero_mask;
-        dist(known) = 0;
-
-        for ir = 1:max_dist
-            known_new = DilateNoWrap(known);
-            add = known_new & ~known;
-            dist(add) = ir;
-            known = known_new;
-        end
-
-        dist(~isfinite(dist)) = max_dist;
-
-        x = (dist - zero_width) ./ ramp_width;
-        x = min(max(x,0),1);
-
-        % Smoothstep 0 -> 1
-        w_raw = x.^2 .* (3 - 2*x);
-    end
-
-    w_raw(~present) = 0;
-
-    % Kappa: reduced but not zero inside present phase.
+    ws = ones(ny,nx);
     wk = zeros(ny,nx);
 
-    if kp ~= 0
-        wk(present) = kappa_min_frac + (1-kappa_min_frac).*w_raw(present);
+    if active(iph)
+
+        tail = (pcur > tail_p) & ~w_dom;
+
+        ws(tail)  = wmin;
+        ws(w_dom) = wmin + (1-wmin).*recovery(w_dom);
+
+        if kp ~= 0
+            wk(k_dom) = kmin + (1-kmin).*recovery(k_dom);
+        end
+
+        w_tail_map(:,:,iph) = tail;
     end
 
-    % Excess-energy scale:
-    %   selected phase     -> weakened near interface, full in core
-    %   non-selected phase -> raw thermodynamics everywhere
-    ws = ones(ny,nx);
+    kappa_eff = max(kappa_eff,kp.*wk);
 
-    if wscale_active(iph)
-        ws(present) = w_scale_min + (1-w_scale_min).*w_raw(present);
-    end
-
-    weight_raw(:,:,iph)    = w_raw;
-    weight_kappa(:,:,iph)  = wk;
     w_scale_phase(:,:,iph) = ws;
-
-    if kp ~= 0
-        kappa_eff = max(kappa_eff,kp.*wk);
-    end
+    kappa_weight(:,:,iph)  = wk;
+    recovery_map(:,:,iph)  = recovery;
+    w_domain_mask(:,:,iph) = w_dom;
+    k_domain_mask(:,:,iph) = k_dom;
 end
 
 % -------------------------------------------------------------------------
-% Optional expensive positivity search
-% Only selected phases can be changed because non-selected phases have ws=1.
+% Store outputs
 % -------------------------------------------------------------------------
-if isfield(PARAM,'WScale_auto_posdef') && PARAM.WScale_auto_posdef == 1
-    w_scale_phase = Auto_Positive_WScale(STATE,PARAM,MODEL,p_phase,w_scale_phase,grain_to_phase,wscale_active);
-end
-
-% -------------------------------------------------------------------------
-% Store diagnostics and output
-% -------------------------------------------------------------------------
-active_kappa_phase = kappa_phase ~= 0;
-
-if any(active_kappa_phase)
-    PARAM.kappa_raw_weight = max(weight_raw(:,:,active_kappa_phase),[],3);
-    PARAM.kappa_chi_weight = max(weight_kappa(:,:,active_kappa_phase),[],3);
-else
-    PARAM.kappa_raw_weight = max(weight_raw,[],3);
-    PARAM.kappa_chi_weight = max(weight_kappa,[],3);
-end
-
 PARAM.kappa_eff              = kappa_eff;
-PARAM.kappa_weight_phase     = weight_kappa;
-PARAM.kappa_weight_phase_raw = weight_raw;
+PARAM.kappa_weight_phase     = kappa_weight;
+PARAM.kappa_weight_phase_raw = recovery_map;
 PARAM.kappa_phase_collapsed  = kappa_phase;
 PARAM.kappa_p_phase          = p_phase;
 
 PARAM.w_scale_phase          = w_scale_phase;
-PARAM.w_scale_active_phase   = wscale_active;
-PARAM.w_scale_min_used       = w_scale_min;
+PARAM.w_scale_active_phase   = active;
+PARAM.w_scale_min_phase      = wmin_phase;
+PARAM.w_scale_min_used       = wmin_phase;
+PARAM.WScale_phase_factor_used = wmin_phase;
 
-PARAM.kappa_min_frac_used    = kappa_min_frac;
-PARAM.use_WScale             = 1;
+PARAM.ramp_weight_phase      = recovery_map;
+PARAM.recovery_weight_phase  = recovery_map;
+PARAM.purity_weight_phase    = ones(ny,nx,Nphase);
 
+PARAM.w_tail_map             = w_tail_map;
+PARAM.w_domain_mask          = w_domain_mask;
+PARAM.kappa_domain_mask      = k_domain_mask;
+
+PARAM.phase_id_collapsed     = phase_id;
+PARAM.phase_name_collapsed   = phase_name;
+PARAM.grain_to_phase         = grain_to_phase;
+
+PARAM.WScale_tail_p_presence_used = tail_p;
+PARAM.WScale_domain_p_used        = w_dom_p;
+PARAM.kappa_domain_p_used         = k_dom_p;
+PARAM.ramp_zero_width_used        = zero_w;
+PARAM.ramp_width_used             = ramp_w;
+PARAM.kappa_min_frac_used         = kmin;
+
+% Compatibility fields. Eta is not changed here.
+PARAM.eta_interface_scale = ones(ny,nx);
+PARAM.eta_scale_phase     = ones(ny,nx,Nphase);
+
+PARAM.use_WScale = any(active);
+
+if any(kappa_phase ~= 0)
+    mask = kappa_phase ~= 0;
+    PARAM.kappa_raw_weight = max(recovery_map(:,:,mask),[],3);
+    PARAM.kappa_chi_weight = max(kappa_weight(:,:,mask),[],3);
+else
+    PARAM.kappa_raw_weight = zeros(ny,nx);
+    PARAM.kappa_chi_weight = zeros(ny,nx);
 end
 
+end
 
 % =========================================================================
-% Optional automatic WScale reduction
+% Collapse grains to thermodynamic phases
 % =========================================================================
-function w_scale_phase = Auto_Positive_WScale(STATE,PARAM,MODEL,p_phase,w_scale_phase,grain_to_phase,wscale_active)
-%AUTO_POSITIVE_WSCALE Reduce w_scale until H_c is positive in protected layer.
+function [phase_id,grain_to_phase,p_phase,phase_name] = CollapsePhases(STATE,MODEL)
 
-[ny,nx,Nphase] = size(w_scale_phase);
-N = ny*nx;
+[ny,nx,Ng] = size(STATE.p);
 
-h_tol  = 1e-10;
-max_it = 8;
-shrink = 0.5;
-
-if isfield(PARAM,'WScale_h_tol')
-    h_tol = PARAM.WScale_h_tol;
-end
-if isfield(PARAM,'WScale_auto_iter')
-    max_it = PARAM.WScale_auto_iter;
-end
-if isfield(PARAM,'WScale_auto_shrink')
-    shrink = PARAM.WScale_auto_shrink;
+if isfield(MODEL,'phase_index') && ~isempty(MODEL.phase_index)
+    phase_index = MODEL.phase_index(:).';
+else
+    phase_index = 1:Ng;
 end
 
-c_phase = CollapseCToPhase(STATE,p_phase,grain_to_phase);
+if numel(phase_index) ~= Ng
+    error('MODEL.phase_index length must match number of grains.')
+end
+
+phase_id = unique(phase_index,'stable');
+Nphase   = numel(phase_id);
+
+grain_to_phase = zeros(1,Ng);
+p_phase        = zeros(ny,nx,Nphase);
+phase_name     = cell(1,Nphase);
 
 for iph = 1:Nphase
 
-    if ~wscale_active(iph)
-        continue
-    end
+    grains = find(phase_index == phase_id(iph));
 
-    ig0 = find(grain_to_phase == iph,1,'first');
+    grain_to_phase(grains) = iph;
+    p_phase(:,:,iph) = sum(STATE.p(:,:,grains),3);
+    phase_name{iph}  = GetPhaseName(MODEL,phase_id(iph),iph);
 
-    if isempty(ig0) || isempty(c_phase{iph})
-        continue
-    end
+end
 
-    pars = MODEL.pars{ig0};
-    ws   = w_scale_phase(:,:,iph);
+end
 
-    active = ws < 0.999999;
+% =========================================================================
+% Convert scalar / grain vector / phase vector to collapsed phase vector
+% =========================================================================
+function v_phase = PhaseValue(v_in,phase_id,grain_to_phase,Nphase,Ng,default_value,name)
 
-    if ~any(active(:))
-        continue
-    end
+if isempty(v_in)
+    v_phase = default_value*ones(1,Nphase);
+    return
+end
 
-    for it = 1:max_it
+v = v_in;
 
-        pars_tmp = pars;
-        pars_tmp.w_scale = reshape(ws,1,N);
+if iscell(v)
+    v = cellfun(@(x) x(1),v);
+end
 
-        R = PhaseThermo(pars_tmp,c_phase{iph});
+v = v(:).';
 
-        if isempty(R.H_c)
-            break
+if isscalar(v)
+
+    v_phase = v*ones(1,Nphase);
+
+elseif numel(v) >= max(phase_id) && all(phase_id == round(phase_id))
+
+    % Preferred case for PARAM.WScale_phase_factor:
+    % one value per metadata phase, indexed by original phase_id.
+    v_phase = v(phase_id);
+
+elseif numel(v) == Nphase
+
+    v_phase = v;
+
+elseif numel(v) == Ng
+
+    v_phase = default_value*ones(1,Nphase);
+
+    for iph = 1:Nphase
+        grains = find(grain_to_phase == iph);
+
+        if ~isempty(grains)
+            v_phase(iph) = min(v(grains));
         end
-
-        mineig = reshape(MinEigPages(R.H_c),ny,nx);
-        bad = mineig < h_tol;
-        bad = bad & active;
-
-        if ~any(bad(:))
-            break
-        end
-
-        ws(bad) = shrink .* ws(bad);
     end
 
-    w_scale_phase(:,:,iph) = ws;
-end
+else
 
-end
+    error('%s must be scalar, length Ng, length Nphase, or metadata phase length.',name)
 
-
-% =========================================================================
-% Collapse grain compositions to thermodynamic phases
-% =========================================================================
-function c_phase = CollapseCToPhase(STATE,p_phase,grain_to_phase)
-
-[ny,nx,~] = size(STATE.p);
-Nphase = size(p_phase,3);
-N = ny*nx;
-
-c_phase = cell(1,Nphase);
-
-for iph = 1:Nphase
-
-    grains = find(grain_to_phase == iph);
-
-    if isempty(grains)
-        c_phase{iph} = {};
-        continue
-    end
-
-    ig0 = grains(1);
-    Nc = numel(STATE.c{ig0});
-    c_phase{iph} = cell(1,Nc);
-
-    den = reshape(p_phase(:,:,iph),1,N);
-    good = den > eps;
-
-    for ic = 1:Nc
-
-        num = zeros(1,N);
-
-        for ig = grains
-            num = num + reshape(STATE.p(:,:,ig),1,N).*reshape(STATE.c{ig}{ic},1,N);
-        end
-
-        tmp = reshape(STATE.c{ig0}{ic},1,N);
-        tmp(good) = num(good)./den(good);
-
-        c_phase{iph}{ic} = tmp;
-    end
 end
 
 end
 
+% =========================================================================
+% Build inside-domain ramp
+% =========================================================================
+function w = BuildInsideRamp(domain,zero_width,ramp_width,ny,nx)
+
+if ~any(domain(:))
+    w = zeros(ny,nx);
+    return
+end
+
+if all(domain(:))
+    w = ones(ny,nx);
+    return
+end
+
+max_dist = zero_width + ramp_width + 1;
+
+dist  = inf(ny,nx);
+known = ~domain;
+
+dist(known) = 0;
+
+for ir = 1:max_dist
+    known_new = DilateNoWrap(known);
+    add = known_new & ~known;
+
+    dist(add) = ir;
+    known = known_new;
+end
+
+dist(~isfinite(dist)) = max_dist;
+
+x = (dist - zero_width)./ramp_width;
+x = min(max(x,0),1);
+
+w = x.^2.*(3 - 2*x);
+w(~domain) = 0;
+
+end
 
 % =========================================================================
-% Small helpers
+% Optional parameter reader
 % =========================================================================
-function mineig = MinEigPages(H)
+function val = GetParam(PARAM,names,default_value)
 
-[~,~,N] = size(H);
-mineig = zeros(1,N);
+val = default_value;
 
-for i = 1:N
-    A = 0.5*(H(:,:,i) + H(:,:,i).');
+for i = 1:numel(names)
+    fn = names{i};
 
-    if any(~isfinite(A(:)))
-        mineig(i) = -inf;
-    else
-        mineig(i) = min(eig(A));
+    if isfield(PARAM,fn) && ~isempty(PARAM.(fn))
+        val = PARAM.(fn);
+        return
     end
 end
 
 end
 
+% =========================================================================
+% Phase name
+% =========================================================================
+function pname = GetPhaseName(MODEL,pid,iph)
+
+pname = ['phase_',num2str(pid)];
+
+if isfield(MODEL,'phs_name')
+    if numel(MODEL.phs_name) >= pid
+        pname = MODEL.phs_name{pid};
+        return
+    elseif numel(MODEL.phs_name) >= iph
+        pname = MODEL.phs_name{iph};
+        return
+    end
+end
+
+if isfield(MODEL,'phase_name')
+    if numel(MODEL.phase_name) >= pid
+        pname = MODEL.phase_name{pid};
+        return
+    elseif numel(MODEL.phase_name) >= iph
+        pname = MODEL.phase_name{iph};
+        return
+    end
+end
+
+end
+
+% =========================================================================
+% No-wrap morphology
+% =========================================================================
+function A = FillSmallHolesNoWrap(A,niter)
+
+A = logical(A);
+
+for it = 1:niter
+    A = ErodeNoWrap(DilateNoWrap(A));
+end
+
+end
 
 function B = DilateNoWrap(A)
 
@@ -515,6 +362,23 @@ end
 if nx > 1
     B(:,2:nx)   = B(:,2:nx)   | A(:,1:nx-1);
     B(:,1:nx-1) = B(:,1:nx-1) | A(:,2:nx);
+end
+
+end
+
+function B = ErodeNoWrap(A)
+
+[ny,nx] = size(A);
+B = A;
+
+if ny > 1
+    B(2:ny,:)   = B(2:ny,:)   & A(1:ny-1,:);
+    B(1:ny-1,:) = B(1:ny-1,:) & A(2:ny,:);
+end
+
+if nx > 1
+    B(:,2:nx)   = B(:,2:nx)   & A(:,1:nx-1);
+    B(:,1:nx-1) = B(:,1:nx-1) & A(:,2:nx);
 end
 
 end

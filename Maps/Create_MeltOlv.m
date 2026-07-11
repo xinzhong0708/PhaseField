@@ -21,28 +21,29 @@ Cname  = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 solmod = 'solution_models_PFM';
 
 % Thermodynamic phase order used everywhere in MODEL.phase_index.
-phs_name = {'Garnet','Clinopyroxene','Kyanite','Quartz'};
+phs_name = {'Garnet','Clinopyroxene','Kyanite','Quartz','Orthopyroxene'};
 
 % Requested phase proportions in the phs_name order above.
 % They do not need to sum to one.
-phase_prop = [0.05 0.40  0.15 0.22];
+phase_prop = [0.05 0.30  0.15 0.22 0.2];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions in the phs_name order above.
 c_value = cell(1,numel(phs_name));
-c_value{1} = [0.45  0.45]; 
-c_value{2} = [0.25  0.30  0.20  0.20];         
+c_value{1} = [0.50  0.45]; 
+c_value{2} = [0.25  0.35  0.25  0.20];         
 c_value{3} = [1];         
 c_value{4} = [1];         
+c_value{5} = [0.25  0.35  0.25  0.20];         
 
 % Symmetric band order.  The middle band is the Garnet seed.
-band_phase_name = {'Quartz','Clinopyroxene','Kyanite','Garnet','Kyanite','Clinopyroxene','Quartz'};
+band_phase_name = {'Quartz','Orthopyroxene','Clinopyroxene','Kyanite','Garnet','Kyanite','Clinopyroxene','Orthopyroxene','Quartz'};
 
 % Domain.  nx=320 gives exact integer widths for the default phase_prop:
 % kya/cpx/qtz/grt/qtz/cpx/kya = 50/75/25/20/25/75/50.
 Lx = 500e-6;
 Ly = 500e-6;
-nx = 450;
+nx = 300;
 ny = 4;
 
 % Scaling / penalty

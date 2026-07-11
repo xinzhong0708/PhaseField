@@ -136,6 +136,18 @@ PHYS.m          = 6*PHYS.sigma/PHYS.l;
 PHYS.kap        = 3/4*PHYS.sigma*PHYS.l;
 
 % ------------------------------------------------------------
+% Global W/kappa interface ramp geometry
+% ------------------------------------------------------------
+zero_grid = Get_Value_Any(Cmain, {'Interface zero kappa grid','Interface zero kappa grid'},2);
+ramp_grid = Get_Value_Any(Cmain, {'Interface ramp grid','Interface kappa ramp grid'},6);
+zero_grid = max(0,round(zero_grid));
+ramp_grid = max(1,round(ramp_grid));
+PARAM.Interface_zero_kapp_grid = zero_grid;
+PARAM.Interface_ramp_grid      = ramp_grid;
+PARAM.ramp_zero_width = zero_grid;
+PARAM.ramp_width      = ramp_grid;
+
+% ------------------------------------------------------------
 % Eta
 % ------------------------------------------------------------
 eta_SI = Get_Value_Any(Cmain,{'Penalty eta','eta'},[]);
