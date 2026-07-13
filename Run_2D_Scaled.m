@@ -3,23 +3,23 @@ clear;figure(1);clf;addpath('bin');addpath('ThermoData');addpath('Thermo');addpa
 
 %LOAD MAP OR CHECKPOINT
 metadata_file = 'Metadata.xlsx';
-map_file      =  'map2d.mat';
+map_file      =  '2000.mat';
 load(map_file)
-% time_rec      =  NUM.t_phy;
+time_rec      =  NUM.t_phy;
 
 %LOAD CURRENT METADATA AFTER THE STATE IS KNOWN
 [PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata(metadata_file,GRID,MODEL,STATE,PARAM.eta,PARAM);
-% NUM.t_phy     =  time_rec;
+NUM.t_phy     =  time_rec;
 
 %DISPLAY ELEMENT
 disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  mean(STATE.E{4},'all')])
 
 % load 1400
-% NUM.dt_phy = NUM.dt_phy/2;
+NUM.dt_phy = 1e7;
 % NUM.dE_target = 0.01;
 % NUM.dp_target = 0.01;
-
-for it = 1:2e4
+ 
+for it = it:2e4
 
     % SAVE CHECKPOINT
     if mod(it,100)==0
@@ -106,8 +106,8 @@ for it = 1:2e4
         PHASE(it,iph) = mean(sum(STATE.p(:,:,grains),3),'all');
     end
 
-    if mod(it,10)==0
-        % disp(PHASE(end,:))
+    if mod(it,5)==0
+        disp(PHASE(end,:))
         PF_Plot([3,3,1],'E3',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,2],'mu_e1',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
         PF_Plot([3,3,3],'dt',STATE,GRID,MODEL,TIME,DTPHY,PHASE)
@@ -145,8 +145,8 @@ end
 function STATE = Snap_PureP(STATE,PARAM,MODEL)
 %SNAP_PUREP Snap nearly pure p to exactly pure and remove tiny p tails.
 
-p_cut  = 1 - 1e-7;
-p_zero = 1e-7;
+p_cut  = 1 - 1e-12;
+p_zero = 1e-12;
 
 if isfield(PARAM,'p_snap_cut')
     p_cut = PARAM.p_snap_cut;

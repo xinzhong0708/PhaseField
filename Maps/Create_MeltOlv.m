@@ -55,7 +55,7 @@ PHYS.vref   = 2e-5;
 E_sc        = PHYS.E_sc;
 L_sc        = PHYS.L_sc;
 vref        = PHYS.vref;
-eta0        = 5000e10/E_sc;
+eta0        = 4000e10/E_sc;
 
 % Initial eta used to build E.
 init_eta_mode        = 'interface_damped';  % 'uniform' or 'interface_damped'

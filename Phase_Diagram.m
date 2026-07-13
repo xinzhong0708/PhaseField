@@ -15,7 +15,7 @@ P             =  3e8;
 solmod        = 'solution_models_PFM';
 
 Cname         = {'Fe'      'Mg'       'Ca'       'Al'     'Si'    'O'};
-Nsys          = [ 0.1415    0.1087    0.0096    0.1516];
+Nsys          = [ 0.086434374999994   0.083418749999997   0.005096875000000   0.218099999999993];
 Nsys          = [Nsys 1-sum(Nsys)];
 
 % Choose phases considered in Gibbs minimization.  Keep the order consistent

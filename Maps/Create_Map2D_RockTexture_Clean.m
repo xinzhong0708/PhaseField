@@ -22,7 +22,7 @@ solmod = 'solution_models_PFM';
 
 phs_name = {'Garnet','Orthopyroxene','Kyanite','Quartz'};
 
-phase_prop = [0.05 0.45 0.25 0.15];
+phase_prop = [0.015 0.35 0.25 0.18];
 phase_prop = phase_prop/sum(phase_prop);
 
 c_value    = cell(1,numel(phs_name));
@@ -38,9 +38,9 @@ nx = 100;
 ny = 100;
 
 % Larger grain_size gives fewer cleaner grains.
-grain_size   = 100e-6;
+grain_size   = 80e-6;
 Ngrain_user  = [];
-rng_seed     = 6;
+rng_seed     = 8;
 periodic_map = 0;
 lloyd_iter   = 8;
 
@@ -65,7 +65,7 @@ assign_iter       = 80;
 plot_map = 1;
 
 theta_grain_user = [];
-theta_rng_seed   = 1002;
+theta_rng_seed   = 1005;
 
 PHYS      = struct();
 PHYS.E_sc = 1e9;
@@ -75,7 +75,7 @@ PHYS.vref = 2e-5;
 E_sc = PHYS.E_sc;
 L_sc = PHYS.L_sc;
 vref = PHYS.vref;
-eta0 = 5000e10/E_sc;
+eta0 = 4000e10/E_sc;
 
 %% Grid
 x  = linspace(0,Lx,nx)/L_sc;
