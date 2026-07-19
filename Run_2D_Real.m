@@ -14,14 +14,14 @@ load('Map2d.mat')
 [PHYS,NUM,PARAM,MODEL,GRID] = Read_PFM_Metadata('MetaData.xlsx',GRID,MODEL,STATE,PARAM.eta,PARAM);
 
 %DISPLAY ELEMENT
-disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  ])
+% disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  mean(STATE.E{4},'all')  mean(STATE.E{5},'all')  mean(STATE.E{6},'all')  ])
 
 % load 1300
 % NUM.dt_phy    = NUM.dt_phy/4;
 % NUM.dp_target = 0.01;
 % NUM.dE_target = 0.01;
-
-for it = 1:2e4
+% load 1600
+for it = 1:5000
 
     % SAVE CHECKPOINT
     if mod(it,100)==0
@@ -75,7 +75,6 @@ for it = 1:2e4
     t                    =    tic;
     [STATE_TRIAL,DIAG_CHLE] = PF_CH_LECorrector_FixedP_Band_CS_offdiagM(STATE_OLD,STATE_LE0,PARAM,MODEL,GRID,PHYS,NUM);
     t_CHLE               =    toc(t);
-
 
 
     % EXTEND PHASE

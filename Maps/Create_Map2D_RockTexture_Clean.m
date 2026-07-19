@@ -15,21 +15,22 @@ addpath('..\Thermo')
 addpath('..\Thermo\Solutions')
 
 %% User controls
-T      = 673;
-P      = 0.3e9;
-Cname  = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
-solmod = 'solution_models_PFM';
+T      = 973;
+P      = 0.5e9;
+Cname  = {'Fe' 'Mg' 'Ca' 'Al' 'Mn' 'H' 'Si' 'O'};
+solmod = 'metapelite_PFM';
 
-phs_name = {'Garnet','Orthopyroxene','Kyanite','Quartz'};
+phs_name = {'Garnet','Orthopyroxene','Kyanite','Quartz','Staurolite'};
 
-phase_prop = [0.015 0.35 0.25 0.18];
+phase_prop = [0.02 0.10 0.03 0.30 0.15];
 phase_prop = phase_prop/sum(phase_prop);
 
 c_value    = cell(1,numel(phs_name));
-c_value{1} = [0.50  0.45]; 
-c_value{2} = [0.25  0.35  0.25  0.05];         
-c_value{3} = [1];         
-c_value{4} = [1];         
+c_value{1} = [0.40  0.40  0.2];
+c_value{2} = [0.25  0.35  0.25  0.05  0.1];
+c_value{3} = [1];
+c_value{4} = [1];
+c_value{5} = [0.3 0.4];
 
 
 Lx = 500e-6;
@@ -38,7 +39,7 @@ nx = 100;
 ny = 100;
 
 % Larger grain_size gives fewer cleaner grains.
-grain_size   = 80e-6;
+grain_size   = 100e-6;
 Ngrain_user  = [];
 rng_seed     = 8;
 periodic_map = 0;
