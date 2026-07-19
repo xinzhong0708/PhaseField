@@ -1,12 +1,17 @@
-% Clear and restart
-clear; figure(1); clf
+%% Make_Map_2D_Symmetric_Garnet_Seed.m
+% Clean pseudo-1D symmetric map:
+%
+%   Kyanite | Clinopyroxene | Quartz | Garnet | Quartz | Clinopyroxene | Kyanite
+%
+% The central Garnet band is the seed.  The two sides are mirror symmetric.
+% The total phase proportions follow phase_prop.
 
-% Repository root
-repo_root = fileparts(mfilename('fullpath'));
+clear; clf
 
-% Required code paths
-addpath(fullfile(repo_root,'config'), genpath(fullfile(repo_root,'src')), genpath(fullfile(repo_root,'Thermo')))
-
+addpath('..\bin')
+addpath('..\')
+addpath('..\Thermo')
+addpath('..\Thermo\Solutions')
 
 %% ========================================================================
 %  User controls
@@ -24,29 +29,29 @@ Cname  = {'Fe' 'Mg' 'Ca' 'Al' 'Si' 'O'};
 solmod = 'solution_models_PFM';
 
 % Thermodynamic phase order used everywhere in MODEL.phase_index.
-phs_name = {'Garnet','Clinopyroxene','Kyanite','Quartz','Orthopyroxene'};
+phs_name = {'Orthopyroxene','Garnet','Kyanite','Quartz'};
 
 % Requested phase proportions in the phs_name order above.
 % They do not need to sum to one.
-phase_prop = [0.05 0.30  0.15 0.22 0.2];
+phase_prop = [0.4 0.02 0.05 0.3];
 phase_prop = phase_prop/sum(phase_prop);
 
 % Initial independent endmember compositions in the phs_name order above.
 c_value = cell(1,numel(phs_name));
-c_value{1} = [0.50  0.45]; 
-c_value{2} = [0.25  0.35  0.25  0.20];         
-c_value{3} = [1];         
-c_value{4} = [1];         
-c_value{5} = [0.25  0.35  0.25  0.20];         
+c_value{1} = [0.30 0.10 0.36 0.02]; 
+c_value{2} = [0.45 0.45];         % Garnet
+c_value{3} = 1.0;                 % Kyanite
+c_value{4} = 1.0;                 % Quartz
 
 % Symmetric band order.  The middle band is the Garnet seed.
-band_phase_name = {'Quartz','Orthopyroxene','Clinopyroxene','Kyanite','Garnet','Kyanite','Clinopyroxene','Orthopyroxene','Quartz'};
+band_phase_name = {'Kyanite','Orthopyroxene','Quartz','Garnet', ...
+                   'Quartz','Orthopyroxene','Kyanite'};
 
 % Domain.  nx=320 gives exact integer widths for the default phase_prop:
 % kya/cpx/qtz/grt/qtz/cpx/kya = 50/75/25/20/25/75/50.
-Lx = 500e-6;
-Ly = 500e-6;
-nx = 300;
+Lx = 100e-6;
+Ly = 100e-6;
+nx = 400;
 ny = 4;
 
 % Scaling / penalty
@@ -62,7 +67,7 @@ eta0        = 4000e10/E_sc;
 
 % Initial eta used to build E.
 init_eta_mode        = 'interface_damped';  % 'uniform' or 'interface_damped'
-init_eta_damp_factor = 0.1;
+init_eta_damp_factor = 0.05;
 init_eta_q2          = 4;
 init_eta_p02         = 3e-3;
 init_eta_q3          = 4;
@@ -125,6 +130,10 @@ grain_phase = Phase_Names_To_ID(phs_name,band_phase_name);
 Ngrain      = numel(grain_phase);
 Np          = Ngrain;
 
+if ~strcmpi(band_phase_name{(Ngrain+1)/2},'Garnet')
+    error('The middle band must be Garnet.')
+end
+
 [band_width,band_fraction] = Local_Symmetric_Band_Widths( ...
     phase_prop,grain_phase,nx);
 
@@ -157,6 +166,7 @@ phase_prop_geom = Compute_Phase_Fraction_From_Map(phase_ID,Nphase);
 % Zero orientation for pseudo-1D symmetric bands.
 theta_grain = zeros(1,Ngrain);
 
+fprintf('\nSymmetric Garnet-seed band map\n')
 fprintf('Band order:\n')
 for ig = 1:Ngrain
     fprintf('  grain %d: %-16s width = %d cells, x = %.4e m\n', ...
@@ -466,9 +476,6 @@ save('Map2d.mat', ...
 fprintf('\nSaved Map2d.mat\n')
 fprintf('Saved symmetric band order:\n')
 disp(band_phase_name)
-
-disp([mean(STATE.E{1},'all') mean(STATE.E{2},'all') mean(STATE.E{3},'all')  mean(STATE.E{4},'all')])
-
 
 %% ========================================================================
 %  Local helper functions

@@ -18,6 +18,7 @@ Nsys   = NsysOx.*ncat;Nsys = [Nsys Nsys*(noxy./ncat)']; Nsys = Nsys/sum(Nsys);% 
 phs_name = {'Quartz','Chlorite','Garnet','Spinel','Biotite','Muscovite','Staurolite','Feldspar(C1)','Chloritoid',...
     'Antigorite','Brucite','Olivine','Orthopyroxene','Clinopyroxene','Amphibole','Talc','Magnesite','Epidote','Melt(H18)',...
     'Cordierite','Ilmenite','Rutile','Andalusite','Sillimanite','Kyanite','Fluid-H2O','Lime','Periclase','Corundum','Zoisite','Lawsonite'};
+phs_name = {'Staurolite'};
 options.nref     = 20; % max number of iterations
 options.eps_dg   = 1e-12; % tolerance to stop iterations when difference between global gibbs minimimum is below this
 options.dz_tol   = 1e-14; % tolerance to stop iterations when z window becomes below this
